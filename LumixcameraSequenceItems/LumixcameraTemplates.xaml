@@ -1,0 +1,82 @@
+﻿<ResourceDictionary
+    x:Class="Roberthasson.NINA.Lumixcamera.LumixcameraTestCategory.PluginItemTemplate"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:local="clr-namespace:Roberthasson.NINA.Lumixcamera.LumixcameraTestCategory"
+    xmlns:mini="clr-namespace:NINA.View.Sequencer.MiniSequencer;assembly=NINA.Sequencer"
+    xmlns:nina="clr-namespace:NINA.View.Sequencer;assembly=NINA.Sequencer">
+    <!--  This geometrygroup defines a custom SVG to be used with the plugin instruction  -->
+    <GeometryGroup x:Key="Plugin_Test_SVG">
+        <PathGeometry Figures="M 153.646,20.8542L 88.875,20.8542L 88.875,180.708L 64.7708,180.708L 64.7708,20.8542L -1.01725e-005,20.8542L -1.01725e-005,-0.5625L 153.646,-0.5625L 153.646,20.8542 Z " />
+        <PathGeometry Figures="M 263.627,115.083L 163.44,115.083C 163.44,123.458 164.69,130.729 167.211,136.938C 169.711,143.146 173.169,148.25 177.544,152.229C 181.752,156.125 186.773,159.042 192.586,161C 198.377,162.958 204.773,163.917 211.773,163.917C 221.023,163.917 230.336,162.083 239.711,158.375C 249.086,154.688 255.752,151.063 259.732,147.479L 260.94,147.479L 260.94,172.438C 253.232,175.688 245.357,178.396 237.315,180.583C 229.273,182.771 220.836,183.875 212.002,183.875C 189.44,183.875 171.836,177.771 159.169,165.563C 146.502,153.354 140.169,136 140.169,113.5C 140.169,91.2708 146.232,73.625 158.377,60.5417C 170.502,47.4792 186.482,40.9375 206.294,40.9375C 224.627,40.9375 238.752,46.3125 248.711,57.0208C 258.648,67.7292 263.627,82.9583 263.627,102.667L 263.627,115.083 Z M 241.357,97.5625C 241.273,85.5625 238.232,76.2708 232.273,69.6875C 226.315,63.1042 217.232,59.8125 205.065,59.8125C 192.815,59.8125 183.044,63.4375 175.794,70.6458C 168.523,77.875 164.398,86.8542 163.44,97.5625L 241.357,97.5625 Z " />
+        <PathGeometry Figures="M 395.425,141.5C 395.425,153.917 390.28,164.104 380.03,172.063C 369.759,180.021 355.738,184 337.967,184C 327.905,184 318.675,182.792 310.28,180.417C 301.863,178.021 294.821,175.396 289.155,172.542L 289.155,146.854L 290.363,146.854C 297.571,152.313 305.613,156.625 314.467,159.833C 323.3,163.042 331.8,164.646 339.925,164.646C 349.967,164.646 357.842,163.021 363.53,159.771C 369.196,156.521 372.05,151.417 372.05,144.438C 372.05,139.083 370.509,135.021 367.425,132.25C 364.342,129.5 358.405,127.146 349.655,125.188C 346.405,124.479 342.155,123.625 336.925,122.646C 331.696,121.667 326.925,120.604 322.634,119.479C 310.696,116.313 302.238,111.667 297.238,105.542C 292.238,99.4167 289.759,91.875 289.759,82.9375C 289.759,77.3542 290.905,72.0833 293.217,67.125C 295.53,62.1667 299.05,57.75 303.759,53.8542C 308.3,50.0417 314.071,47.0208 321.092,44.7917C 328.113,42.5625 335.967,41.4375 344.675,41.4375C 352.78,41.4375 360.988,42.4375 369.321,44.4167C 377.634,46.4167 384.55,48.8333 390.071,51.6667L 390.071,76.125L 388.863,76.125C 383.009,71.8333 375.905,68.1875 367.55,65.2292C 359.175,62.2708 350.988,60.7917 342.967,60.7917C 334.592,60.7917 327.53,62.3958 321.78,65.6042C 316.009,68.8125 313.134,73.5833 313.134,79.8958C 313.134,85.5208 314.863,89.7292 318.363,92.5625C 321.78,95.4167 327.3,97.7292 334.925,99.5C 339.134,100.479 343.863,101.458 349.113,102.438C 354.342,103.417 358.696,104.313 362.196,105.104C 372.821,107.542 381.03,111.729 386.8,117.646C 392.55,123.646 395.425,131.604 395.425,141.5 Z " />
+        <PathGeometry Figures="M 498.653,179.5C 494.361,180.625 489.673,181.542 484.59,182.292C 479.507,183.021 474.986,183.396 471.028,183.396C 457.153,183.396 446.59,179.667 439.361,172.188C 432.132,164.729 428.528,152.75 428.528,136.271L 428.528,63.9583L 413.069,63.9583L 413.069,44.7292L 428.528,44.7292L 428.528,5.64583L 451.423,5.64583L 451.423,44.7292L 498.653,44.7292L 498.653,63.9583L 451.423,63.9583L 451.423,125.917C 451.423,133.083 451.569,138.667 451.903,142.667C 452.236,146.688 453.361,150.438 455.319,153.917C 457.111,157.167 459.569,159.542 462.694,161.042C 465.819,162.542 470.569,163.292 476.986,163.292C 480.715,163.292 484.611,162.75 488.673,161.667C 492.715,160.583 495.653,159.667 497.444,158.917L 498.653,158.917L 498.653,179.5 Z " />
+    </GeometryGroup>
+
+    <!--  The definition of the plugin test instruction style  -->
+    <!--  The DataType has to be defined as the instruction in context  -->
+    <DataTemplate DataType="{x:Type local:LumixcameraInstruction}">
+        <nina:SequenceBlockView>
+            <nina:SequenceBlockView.SequenceItemContent>
+                <StackPanel Orientation="Horizontal">
+                    <TextBlock VerticalAlignment="Center" Text="Notification Message" />
+                    <TextBox
+                        MinWidth="40"
+                        Margin="5,0,0,0"
+                        Text="{Binding Text}"
+                        TextAlignment="Right" />
+                </StackPanel>
+            </nina:SequenceBlockView.SequenceItemContent>
+        </nina:SequenceBlockView>
+    </DataTemplate>
+
+    <!--  The definition of the test instruction plugin style in the mini format on the imaging tab  -->
+    <!--  The Key has to be defined as the fully qualified instruction name and the "_Mini" postfix  -->
+    <DataTemplate x:Key="Roberthasson.NINA.Lumixcamera.LumixcameraTestCategory.LumixcameraInstruction_Mini">
+        <mini:MiniSequenceItem>
+            <mini:MiniSequenceItem.SequenceItemContent>
+                <StackPanel Orientation="Horizontal">
+                    <TextBlock
+                        MinWidth="40"
+                        Margin="5,0,0,0"
+                        VerticalAlignment="Center"
+                        Text="{Binding Text}"
+                        TextAlignment="Right" />
+                </StackPanel>
+            </mini:MiniSequenceItem.SequenceItemContent>
+        </mini:MiniSequenceItem>
+    </DataTemplate>
+
+    <!--  The definition of the plugin test condition style  -->
+    <!--  The DataType has to be defined as the instruction in context  -->
+    <DataTemplate DataType="{x:Type local:LumixcameraCondition}">
+        <nina:SequenceBlockView>
+            <nina:SequenceBlockView.SequenceItemContent>
+                <StackPanel Orientation="Horizontal">
+                    <TextBlock VerticalAlignment="Center" Text="Is truthy" />
+
+                    <CheckBox
+                        MinWidth="40"
+                        Margin="5,0,0,0"
+                        VerticalAlignment="Center"
+                        IsChecked="{Binding IsTruthy}" />
+                </StackPanel>
+            </nina:SequenceBlockView.SequenceItemContent>
+        </nina:SequenceBlockView>
+    </DataTemplate>
+
+    <!--  The definition of the test condition plugin style in the mini format on the imaging tab  -->
+    <!--  The Key has to be defined as the fully qualified instruction name and the "_Mini" postfix  -->
+    <DataTemplate x:Key="Roberthasson.NINA.Lumixcamera.LumixcameraTestCategory.LumixcameraCondition_Mini">
+        <mini:MiniSequenceItem>
+            <mini:MiniSequenceItem.SequenceItemContent>
+                <StackPanel Orientation="Horizontal">
+                    <CheckBox
+                        MinWidth="40"
+                        VerticalAlignment="Center"
+                        IsChecked="{Binding IsTruthy}" />
+                </StackPanel>
+            </mini:MiniSequenceItem.SequenceItemContent>
+        </mini:MiniSequenceItem>
+    </DataTemplate>
+</ResourceDictionary>

@@ -1,0 +1,50 @@
+﻿<ResourceDictionary
+    x:Class="Roberthasson.NINA.Lumixcamera.LumixcameraDockables.MyPluginDockableTemplates"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:alt="clr-namespace:NINA.WPF.Base.View;assembly=NINA.WPF.Base"
+    xmlns:local="clr-namespace:Roberthasson.NINA.Lumixcamera.LumixcameraDockables"
+    xmlns:mini="clr-namespace:NINA.View.Sequencer.MiniSequencer;assembly=NINA.Sequencer"
+    xmlns:nina="clr-namespace:NINA.View.Sequencer;assembly=NINA.Sequencer"
+    xmlns:util="clr-namespace:NINA.Core.Utility;assembly=NINA.Core">
+
+    <!--  The datatemplae for the dockable is indicated by the fully qualified class name and the postfix _Dockable  -->
+    <DataTemplate x:Key="Roberthasson.NINA.Lumixcamera.LumixcameraDockables.LumixcameraDockable_Dockable">
+        <Grid Margin="5">
+            <Grid Visibility="{Binding Target, Converter={StaticResource NullToVisibilityCollapsedConverter}}">
+                <Grid.Resources>
+                    <util:BindingProxy x:Key="nighttimeProxy" Data="{Binding NighttimeData}" />
+                </Grid.Resources>
+                <alt:AltitudeChart
+                    HorizontalAlignment="Stretch"
+                    VerticalAlignment="Stretch"
+                    HorizontalContentAlignment="Stretch"
+                    VerticalContentAlignment="Stretch"
+                    AnnotateAltitudeAxis="False"
+                    AnnotateTimeAxis="False"
+                    DataContext="{Binding Target}"
+                    NighttimeData="{Binding Source={StaticResource nighttimeProxy}, Path=Data}" />
+            </Grid>
+            <Grid Visibility="{Binding TelescopeInfo.Connected, Converter={StaticResource InverseBooleanToVisibilityCollapsedConverter}}">
+                <TextBlock
+                    HorizontalAlignment="Center"
+                    VerticalAlignment="Center"
+                    Text="Telescope not connected" />
+            </Grid>
+            <Grid Visibility="{Binding TelescopeInfo.Connected, Converter={StaticResource VisibilityConverter}}">
+                <Grid Visibility="{Binding TelescopeInfo.TrackingEnabled, Converter={StaticResource InverseBooleanToVisibilityCollapsedConverter}}">
+                    <TextBlock
+                        HorizontalAlignment="Center"
+                        VerticalAlignment="Center"
+                        Text="Telescope not tracking" />
+                </Grid>
+            </Grid>
+        </Grid>
+    </DataTemplate>
+
+    <!--  This geometrygroup defines a custom SVG to be used with the plugin dockable  -->
+    <GeometryGroup x:Key="Roberthasson.NINA.Lumixcamera_AltitudeSVG">
+        <PathGeometry Figures="M 1.01725e-005,0.349426L 1.01725e-005,421.333L 625.953,421.333L 625.953,0.349426M 15.12,15.4694L 610.839,15.4694L 610.839,406.213L 15.12,406.213" />
+        <PathGeometry Figures="M 312.276,113.647C 296.183,113.224 280.485,120.109 265.011,132.781C 249.537,145.453 233.833,164.005 216.543,188.573C 181.953,237.709 141.089,311.073 86.8653,409.609L 101.464,417.641C 155.667,319.141 196.527,245.964 230.167,198.172C 246.991,174.276 262.027,156.771 275.568,145.677C 289.109,134.589 300.709,130.011 311.833,130.303C 322.959,130.595 334.657,135.844 348.131,147.563C 361.604,159.276 376.453,177.308 393.005,201.5C 426.104,249.891 466.1,322.781 519.157,419.229L 533.751,411.199C 480.704,314.761 440.724,241.745 406.756,192.095C 389.776,167.271 374.313,148.251 359.063,134.989C 343.813,121.729 328.371,114.073 312.276,113.647 Z " />
+    </GeometryGroup>
+</ResourceDictionary>
