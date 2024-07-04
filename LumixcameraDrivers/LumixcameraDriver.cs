@@ -14,7 +14,11 @@ using System.Runtime.InteropServices;
 using NINA.Profile.Interfaces;
 using NINA.Image.ImageData;
 using NINA.Profile;
-using LumixDriverWrapper;
+using LumixWrapper;
+using static LumixWrapper.LumixCam;
+using NINA.Equipment.Equipment.MyGuider;
+using Accord.Math;
+using NINA.Core.Utility.Notification;
 
 namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
 
@@ -26,32 +30,85 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
     public class LumixcameraDriver : BaseINPC, ICamera {
         private IProfileService _profileService;
         private readonly IExposureDataFactory _exposureDataFactory;
+        private LumixCam.LMX_DEVINFO _lmxDevInfo = new LMX_DEVINFO();
+        private LumixCam.LMX_CONNECT_DEVICE_INFO _lmxConnectDeviceInfo = new LMX_CONNECT_DEVICE_INFO();
+        private uint retError, deviceConnectVer;
+        private byte ret;
+        private uint _index;
 
-        public LumixcameraDriver(IProfileService profileService, IExposureDataFactory exposureDataFactory) {
+        public LumixcameraDriver(IProfileService profileService, IExposureDataFactory exposureDataFactory, LumixCam.LMX_DEVINFO lmxDevInfo, LumixCam.LMX_CONNECT_DEVICE_INFO lmxConnetDeviceInfo, int index) {
             _profileService = profileService;
             _exposureDataFactory = exposureDataFactory;
-            // _device = device;
+            _lmxDevInfo = lmxDevInfo;
+            _lmxConnectDeviceInfo = lmxConnetDeviceInfo;
+            _index = ((uint)index);
+            //  ret = LumixCam.LMX_func_api_Select_PnPDevice(((uint)i), ref lmxConnetDeviceInfo, out retError);
+            //  ret = LumixCam.LMX_func_api_Open_Session(0x00010001, out deviceConnectVer,out retError);
+
+            // Register callback function
+            // ret = LumixCam.LMX_func_api_Reg_NotifyCallback(LumixCam.Lmx_event_id::LMX_DEF_LIB_EVENT_ID_OBJCT_ADD, NotifyCallbackFunction);
+            //ret = LumixCam.LMX_func_api_Reg_NotifyCallback(LumixCam.Lmx_event_id::LMX_DEF_LIB_EVENT_ID_OBJCT_REQ_TRNSFER, NotifyCallbackFunction);
         }
 
-        public bool HasShutter => throw new NotImplementedException();
+        public static int NotifyCallbackFunction(uint cb_event_type, uint cb_event_param) {
+            switch ((Lmx_event_id)cb_event_type) {
+                case Lmx_event_id.LMX_DEF_LIB_EVENT_ID_OBJCT_REQ_TRNSFER:
+                case Lmx_event_id.LMX_DEF_LIB_EVENT_ID_OBJCT_ADD:
+                    //      CopyFileToPC(cb_event_type, cb_event_param);
+                    break;
 
-        public double Temperature => throw new NotImplementedException();
+                default:
+                    return -1;
+            }
+
+            return 0;
+        }
+
+        public bool HasShutter => true;
+
+        public double Temperature {
+            get => double.NaN;
+        }
 
         public double TemperatureSetPoint { get => throw new NotImplementedException(); set => throw new NotImplementedException(); }
-        public short BinX { get => throw new NotImplementedException(); set => throw new NotImplementedException(); }
-        public short BinY { get => throw new NotImplementedException(); set => throw new NotImplementedException(); }
+        public short BinX { get => 1; set => throw new NotImplementedException(); }
+        public short BinY { get => 1; set => throw new NotImplementedException(); }
 
-        public string SensorName => throw new NotImplementedException();
+        public string SensorName {
+            get {
+                if (_lmxDevInfo.dev_ModelName != string.Empty) {
+                    return _lmxDevInfo.dev_ModelName;
+                } else {
+                    return string.Empty;
+                }
+            }
+        }
 
-        public SensorType SensorType => throw new NotImplementedException();
+        public SensorType SensorType { get => SensorType.RGGB; set => throw new NotImplementedException(); }
 
-        public short BayerOffsetX => throw new NotImplementedException();
+        public short BayerOffsetX { get => 1; set => throw new NotImplementedException(); }
 
-        public short BayerOffsetY => throw new NotImplementedException();
+        public short BayerOffsetY { get => 1; set => throw new NotImplementedException(); }
 
-        public int CameraXSize => throw new NotImplementedException();
+        public int CameraXSize {
+            get {
+                if (!_lmxConnectDeviceInfo.IsEqual(null)) {
+                    return 3680;//_camera.ImageSize.Width;
+                } else {
+                    return 0;
+                }
+            }
+        }
 
-        public int CameraYSize => throw new NotImplementedException();
+        public int CameraYSize {
+            get {
+                if (!_lmxConnectDeviceInfo.IsEqual(null)) {
+                    return 2760;//_camera.ImageSize.Width;
+                } else {
+                    return 0;
+                }
+            }
+        }
 
         public double ExposureMin => throw new NotImplementedException();
 
@@ -180,7 +237,15 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
         }
 
         public void StartExposure(CaptureSequence sequence) {
-            throw new NotImplementedException();
+            if (!_lmxConnectDeviceInfo.IsEqual(null)) {
+                LMX_STRUCT_REC_CTRL lmx_rec_ctrl = new LMX_STRUCT_REC_CTRL();
+                lmx_rec_ctrl.CtrlID = ((uint)Lmx_TagID_Rec_Ctrl_Release.LMX_DEF_LIB_TAG_REC_CTRL_RELEASE_ONESHOT);
+                lmx_rec_ctrl.ParamData.NumOfVal = 0;
+                ret = LMX_func_api_Rec_Ctrl_Release(ref lmx_rec_ctrl, out retError);
+                if (retError == LMX_BOOL_FALSE) {
+                    Notification.ShowWarning("Can't execute Single-shot command");
+                }
+            }
         }
 
         public Task WaitUntilExposureIsReady(CancellationToken token) {
@@ -188,11 +253,22 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
         }
 
         public void StopExposure() {
-            throw new NotImplementedException();
+            LMX_STRUCT_SS_CAPA_INFO pSS_CapaInfo = new LMX_STRUCT_SS_CAPA_INFO();
+            LMX_func_api_SS_Get_Capability(ref pSS_CapaInfo, out retError);
+
+            if (!_lmxConnectDeviceInfo.IsEqual(null) && !pSS_CapaInfo.Capa_Enum.IsEqual(Lmx_def_lib_DevpropEx_ShutterSpeed_param.LMX_DEF_PTP_DEVPROP_EXT_LMX_SS_BULB)) {
+                LMX_STRUCT_REC_CTRL lmx_rec_ctrl = new LMX_STRUCT_REC_CTRL();
+                lmx_rec_ctrl.CtrlID = ((uint)Lmx_TagID_Rec_Ctrl_Release.LMX_DEF_LIB_TAG_REC_CTRL_RELEASE_ONESHOT);
+                lmx_rec_ctrl.ParamData.NumOfVal = 0;
+                ret = LMX_func_api_Rec_Ctrl_Release(ref lmx_rec_ctrl, out retError);
+                if (retError == LMX_BOOL_FALSE) {
+                    Notification.ShowWarning("Can't stop exposure");
+                }
+            }
         }
 
         public void AbortExposure() {
-            throw new NotImplementedException();
+            StopExposure();
         }
 
         public Task<IExposureData> DownloadExposure(CancellationToken token) {
@@ -212,11 +288,29 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
         }
 
         public Task<bool> Connect(CancellationToken token) {
-            throw new NotImplementedException();
+            //throw new NotImplementedException();
+            return Task.Run<bool>(() => {
+                try {
+                    ret = LumixCam.LMX_func_api_Select_PnPDevice(_index, ref _lmxConnectDeviceInfo, out retError);
+                    ret = LumixCam.LMX_func_api_Open_Session(0x00010001, out deviceConnectVer, out retError);
+                } catch (Exception ex) {
+                    Logger.Error(ex);
+                }
+                return _lmxConnectDeviceInfo.IsEqual(null);
+            });
         }
 
         public void Disconnect() {
-            throw new NotImplementedException();
+            //throw new NotImplementedException();
+            if (!_lmxConnectDeviceInfo.IsEqual(null)) {
+                try {
+                    ret = LumixCam.LMX_func_api_Close_Session(out retError);
+                } catch (Exception ex) {
+                    Logger.Error(ex);
+                    _lmxConnectDeviceInfo.Equals(null);
+                    _lmxDevInfo.Equals(null);
+                }
+            }
         }
     }
 }

@@ -11,50 +11,8 @@ using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
-
-public static class PanasonicSDK {
-
-    // Define the LMX_BOOL_TRUE constant
-    public const byte LMX_BOOL_TRUE = 1;
-
-    // Define the LMX_CONNECT_DEVICE_INFO structure
-    [StructLayout(LayoutKind.Sequential)]
-    public struct LMX_CONNECT_DEVICE_INFO {
-
-        // Define the fields as per the SDK documentation
-        // For example:
-        public int DeviceID;
-
-        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 256)]
-        public string DeviceName;
-
-        // Add other fields as necessary
-    }
-
-    // Initialize the communication library
-    [DllImport("lmxptpif.dll", CallingConvention = CallingConvention.Cdecl)]
-    public static extern void LMX_func_api_Init();
-
-    // Get information on devices that can be connected
-    [DllImport("lmxptpif.dll", CallingConvention = CallingConvention.Cdecl)]
-    public static extern byte LMX_func_api_Get_PnPDeviceInfo(ref LMX_CONNECT_DEVICE_INFO plmxPnpDevInfo);
-
-    // Connect to a selected device
-    [DllImport("lmxptpif.dll", CallingConvention = CallingConvention.Cdecl)]
-    public static extern byte LMX_func_api_Select_PnPDevice(uint dwDevIndex, ref LMX_CONNECT_DEVICE_INFO plmxPnpDevInfo);
-
-    // Disconnect a connected device
-    [DllImport("lmxptpif.dll", CallingConvention = CallingConvention.Cdecl)]
-    public static extern byte LMX_func_api_Close_Device();
-
-    // Open a session to use USB
-    [DllImport("lmxptpif.dll", CallingConvention = CallingConvention.Cdecl)]
-    public static extern byte LMX_func_api_Open_Session(uint ulConnectVer, out uint pulDeviceConnectVer);
-
-    // Close a session
-    [DllImport("lmxptpif.dll", CallingConvention = CallingConvention.Cdecl)]
-    public static extern byte LMX_func_api_Close_Session();
-}
+using LumixWrapper;
+using System.Security.Cryptography.Xml;
 
 namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
 
@@ -67,19 +25,41 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
     public class LumixcameraProvider : IEquipmentProvider<ICamera> {
         private IProfileService profileService;
         private IExposureDataFactory exposureDataFactory;
+        private LumixCam driver = new LumixCam();
 
         [ImportingConstructor]
         public LumixcameraProvider(IProfileService profileService, IExposureDataFactory exposureDataFactory) {
             this.profileService = profileService;
             this.exposureDataFactory = exposureDataFactory;
+
+            try {
+                LumixCam.LMX_func_api_Init();
+            } catch (Exception ex) {
+            }
         }
 
         public string Name => "LumixCameraPlugin";
 
         public IList<ICamera> GetEquipment() {
             var devices = new List<ICamera>();
-            devices.Add(new LumixcameraDriver(profileService, exposureDataFactory));
+            uint retError;
+            LumixCam.LMX_CONNECT_DEVICE_INFO devInfo = new LumixCam.LMX_CONNECT_DEVICE_INFO();
+            uint ret;
 
+            if (this.driver != null) {
+                try {
+                    uint GotDevices = LumixCam.LMX_func_api_Get_PnPDeviceInfo(ref devInfo, out retError);
+                    uint countDevices = devInfo.find_PnpDevice_Count;
+
+                    for (int i = 0; i < countDevices; i++) {
+                        devices.Add(new LumixcameraDriver(profileService, exposureDataFactory, devInfo.find_PnpDevice_Info[i], devInfo, i));
+                    }
+
+                    Logger.Info($"Found {countDevices} Lumix Cameras");
+                } catch (Exception ex) {
+                    Logger.Error(ex);
+                }
+            }
             return devices;
         }
     }
