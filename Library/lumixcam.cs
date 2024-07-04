@@ -586,7 +586,8 @@ namespace LumixWrapper {
         // REC_CTRL_ZOOM                  																//
         // 																								//
         //////////////////////////////////////////////////////////////////////////////////////////////////
-#pragma region REC_CTRL_ZOOM
+
+        #region REC_CTRL_ZOOM
 
         /////////////////////////////////////////////////
         //
@@ -624,7 +625,7 @@ namespace LumixWrapper {
             LMX_DEF_REC_CTRL_ZOOM_SPEED_HIGHER,
         };
 
-#pragma endregion
+        #endregion REC_CTRL_ZOOM
 
         /////////////////////////////////////////////////
         //

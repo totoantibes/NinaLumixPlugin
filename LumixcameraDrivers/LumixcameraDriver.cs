@@ -35,6 +35,45 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
         private uint retError, deviceConnectVer;
         private byte ret;
         private uint _index;
+        private uint _curIsoValue = 0;
+        private uint _curSsValue = 0;
+        private AsyncObservableCollection<BinningMode> _binningModes;
+        //private uint _curApetureValue = 0 useless in nina context;
+        //private uint _curWbValue = 0; useless in Nina context
+        //private uint _curExposureCompValue = 0;useless in Nina context
+
+        private LMX_STRUCT_ISO_CAPA_INFO Iso_CapaInfo = new LMX_STRUCT_ISO_CAPA_INFO();
+        private LMX_STRUCT_SS_CAPA_INFO SS_CapaInfo = new LMX_STRUCT_SS_CAPA_INFO();
+
+        private static string GetStringSS(ulong value) {
+            string str = string.Empty;
+
+            switch (value) {
+                case ((ulong)Lmx_def_lib_DevpropEx_ShutterSpeed_param.LMX_DEF_PTP_DEVPROP_EXT_LMX_SS_BULB):
+                    str = "Bulb";
+                    break;
+
+                case ((ulong)Lmx_def_lib_DevpropEx_ShutterSpeed_param.LMX_DEF_PTP_DEVPROP_EXT_LMX_SS_AUTO):
+                    str = "Auto";
+                    break;
+
+                case ((ulong)Lmx_def_lib_DevpropEx_ShutterSpeed_param.LMX_DEF_PTP_DEVPROP_EXT_LMX_SS_UNKNOWN):
+                    str = "Unknown";
+                    break;
+
+                default:
+                    if ((value & 0x80000000) == 0x00000000) {
+                        str = "1/" + (value / 1000).ToString();
+                    } else {
+                        value = (value & 0x7fffffff);
+                        str = (value / 1000).ToString();
+                    }
+                    str += " sec";
+                    break;
+            }
+
+            return str;
+        }
 
         public LumixcameraDriver(IProfileService profileService, IExposureDataFactory exposureDataFactory, LumixCam.LMX_DEVINFO lmxDevInfo, LumixCam.LMX_CONNECT_DEVICE_INFO lmxConnetDeviceInfo, int index) {
             _profileService = profileService;
@@ -114,15 +153,15 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
 
         public double ExposureMax => throw new NotImplementedException();
 
-        public short MaxBinX => throw new NotImplementedException();
+        public short MaxBinX { get => 1; set => throw new NotImplementedException(); }
 
-        public short MaxBinY => throw new NotImplementedException();
+        public short MaxBinY { get => 1; set => throw new NotImplementedException(); }
 
-        public double PixelSizeX => throw new NotImplementedException();
+        public double PixelSizeX => 4.68;//hard coded for now
 
-        public double PixelSizeY => throw new NotImplementedException();
+        public double PixelSizeY => 4.68;//hard coded for now
 
-        public bool CanSetTemperature => throw new NotImplementedException();
+        public bool CanSetTemperature => false;
 
         public bool CoolerOn { get => throw new NotImplementedException(); set => throw new NotImplementedException(); }
 
@@ -132,7 +171,7 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
 
         public bool DewHeaterOn { get => throw new NotImplementedException(); set => throw new NotImplementedException(); }
 
-        public CameraStates CameraState => throw new NotImplementedException();
+        public CameraStates CameraState => CameraStates.NoState; // TODO
 
         public bool CanSubSample => throw new NotImplementedException();
 
@@ -142,75 +181,145 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
         public int SubSampleWidth { get => throw new NotImplementedException(); set => throw new NotImplementedException(); }
         public int SubSampleHeight { get => throw new NotImplementedException(); set => throw new NotImplementedException(); }
 
-        public bool CanShowLiveView => throw new NotImplementedException();
+        public bool CanShowLiveView => false; //TO DO
 
         public bool LiveViewEnabled => throw new NotImplementedException();
 
-        public bool HasBattery => throw new NotImplementedException();
+        public bool HasBattery => true;
 
-        public int BatteryLevel => throw new NotImplementedException();
+        public int BatteryLevel => 100; //hardcoded for now
 
-        public int BitDepth => throw new NotImplementedException();
+        public int BitDepth => 14; // hardcoded for now
+        public bool CanSetOffset => false;
 
-        public bool CanSetOffset => throw new NotImplementedException();
+        public int Offset { get => -1; set => throw new NotImplementedException(); }
 
-        public int Offset { get => throw new NotImplementedException(); set => throw new NotImplementedException(); }
+        public int OffsetMin => 0;
 
-        public int OffsetMin => throw new NotImplementedException();
+        public int OffsetMax => 0;
 
-        public int OffsetMax => throw new NotImplementedException();
+        public bool CanSetUSBLimit => false;
 
-        public bool CanSetUSBLimit => throw new NotImplementedException();
+        public int USBLimit { get => -1; set => throw new NotImplementedException(); }
 
-        public int USBLimit { get => throw new NotImplementedException(); set => throw new NotImplementedException(); }
+        public int USBLimitMin => -1;
 
-        public int USBLimitMin => throw new NotImplementedException();
+        public int USBLimitMax => -1;
 
-        public int USBLimitMax => throw new NotImplementedException();
+        public int USBLimitStep => -1;
 
-        public int USBLimitStep => throw new NotImplementedException();
+        public bool CanGetGain {
+            get {
+                if (_lmxDevInfo.dev_ModelName != string.Empty) {
+                    return true;
+                } else { return false; }
+            }
+        }
 
-        public bool CanGetGain => throw new NotImplementedException();
+        //=> throw new NotImplementedException();
 
-        public bool CanSetGain => throw new NotImplementedException();
+        public bool CanSetGain => CanGetGain;
 
-        public int GainMax => throw new NotImplementedException();
+        public int GainMax {
+            get {
+                if (_lmxDevInfo.dev_ModelName != string.Empty) {
+                    return ((int)Iso_CapaInfo.Capa_Enum.SupportVal.Max());
+                } else { return 0; }
+            }
+        }
 
-        public int GainMin => throw new NotImplementedException();
+        public int GainMin {
+            get {
+                if (_lmxDevInfo.dev_ModelName != string.Empty) {
+                    return ((int)Iso_CapaInfo.Capa_Enum.SupportVal.Min());
+                } else { return 0; }
+            }
+        }
 
-        public int Gain { get => throw new NotImplementedException(); set => throw new NotImplementedException(); }
+        public int Gain {
+            get {
+                return ((int)Iso_CapaInfo.CurVal);
+            }
+            set {
+                ret = LMX_func_api_ISO_Set_Param(((uint)value), out retError);
+            }
+        }
 
-        public double ElectronsPerADU => throw new NotImplementedException();
+        public double ElectronsPerADU => double.NaN;
 
-        public IList<string> ReadoutModes => throw new NotImplementedException();
+        public IList<string> ReadoutModes {
+            get {
+                List<string> readoutModes = new List<string> { "Default" };
+                return readoutModes;
+            }
+        }
 
-        public short ReadoutMode { get => throw new NotImplementedException(); set => throw new NotImplementedException(); }
+        public short ReadoutMode {
+            get => 0;
+            set { }
+        }
+
         public short ReadoutModeForSnapImages { get => throw new NotImplementedException(); set => throw new NotImplementedException(); }
         public short ReadoutModeForNormalImages { get => throw new NotImplementedException(); set => throw new NotImplementedException(); }
 
-        public IList<int> Gains => throw new NotImplementedException();
+        public IList<int> Gains {
+            get {
+                List<int> gains = new List<int>();
+                foreach (int val in Iso_CapaInfo.Capa_Enum.SupportVal) { Gains.Add(val); }
+                return Gains;
+            }
+        }
 
-        public AsyncObservableCollection<BinningMode> BinningModes => throw new NotImplementedException();
+        public AsyncObservableCollection<BinningMode> BinningModes {
+            get {
+                if (_binningModes == null) {
+                    _binningModes = new AsyncObservableCollection<BinningMode>();
+                    _binningModes.Add(new BinningMode(1, 1));
+                }
 
-        public bool HasSetupDialog => throw new NotImplementedException();
+                return _binningModes;
+            }
+        }
 
-        public string Id => throw new NotImplementedException();
+        public bool HasSetupDialog => false;
 
-        public string Name => throw new NotImplementedException();
+        public string Id => "Lumix";
 
-        public string DisplayName => throw new NotImplementedException();
+        public string Name {
+            get {
+                if (_lmxDevInfo.dev_ModelName != string.Empty) {
+                    return _lmxDevInfo.dev_ModelName;
+                } else {
+                    return string.Empty;
+                }
+            }
+        }
 
-        public string Category => throw new NotImplementedException();
+        public string DisplayName {
+            get {
+                if (_lmxDevInfo.dev_ModelName != string.Empty) {
+                    return _lmxDevInfo.dev_ModelName;
+                } else {
+                    return string.Empty;
+                }
+            }
+        }
 
-        public bool Connected => throw new NotImplementedException();
+        public string Category { get => "Lumix"; }
 
-        public string Description => throw new NotImplementedException();
+        public bool Connected {
+            get {
+                return !_lmxConnectDeviceInfo.IsEqual(null);
+            }
+        }
 
-        public string DriverInfo => throw new NotImplementedException();
+        public string Description => "Description";
 
-        public string DriverVersion => throw new NotImplementedException();
+        public string DriverInfo => "Driver Info";
 
-        public IList<string> SupportedActions => throw new NotImplementedException();
+        public string DriverVersion => "DriverVersion";
+
+        public IList<string> SupportedActions => new List<string>();
 
         public void SendCommandBlind(string command, bool raw = true) {
             throw new NotImplementedException();
@@ -291,12 +400,29 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
             //throw new NotImplementedException();
             return Task.Run<bool>(() => {
                 try {
+                    //connect to device
                     ret = LumixCam.LMX_func_api_Select_PnPDevice(_index, ref _lmxConnectDeviceInfo, out retError);
                     ret = LumixCam.LMX_func_api_Open_Session(0x00010001, out deviceConnectVer, out retError);
+
+                    ret = LMX_func_api_SS_Get_Capability(ref SS_CapaInfo, out retError);
+                    ret = LMX_func_api_ISO_Get_Capability(ref Iso_CapaInfo, out retError);
+
+                    // Register callback function
+                    // Get current parameter values
+                    ret = LumixCam.LMX_func_api_ISO_Get_Param(out _curIsoValue, out retError);
+                    ret = LumixCam.LMX_func_api_SS_Get_Param(out _curSsValue, out retError);
+
+                    //useless in nina context
+                    //ret = LumixCam.LMX_func_api_Aperture_Get_Param(out _curApetureValue, out retError);
+                    //ret = LumixCam.LMX_func_api_WB_Get_Param(out _curWbValue, out retError);
+                    //ret = LumixCam.LMX_func_api_Exposure_Get_Param(out _curExposureCompValue, out retError);
+
+                    //ret = LumixCam.LMX_func_api_Reg_NotifyCallback(LumixCam.Lmx_event_id.LMX_DEF_LIB_EVENT_ID_OBJCT_ADD, NotifyCallbackFunction);
+                    //ret = LumixCam.LMX_func_api_Reg_NotifyCallback(LumixCam.Lmx_event_id.LMX_DEF_LIB_EVENT_ID_OBJCT_REQ_TRNSFER, NotifyCallbackFunction);
                 } catch (Exception ex) {
                     Logger.Error(ex);
                 }
-                return _lmxConnectDeviceInfo.IsEqual(null);
+                return !_lmxConnectDeviceInfo.IsEqual(null);
             });
         }
 
