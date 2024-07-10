@@ -24,6 +24,10 @@ namespace LumixWrapper {
         //static LumixCam() {
         //    DllLoader.LoadDll(Path.Combine("Lumix", DLLNAME));
         //}
+        public const CallingConvention cc = CallingConvention.Winapi;
+
+        public const UnmanagedType ut = UnmanagedType.LPWStr;
+        public bool disposedValue;
 
         public const ushort DEVINFO_DEF_ARRAY_MAX = 512;        // The number of ARRAY (other than String) is represented by ULONG, but in this application it is possible to represent up to 512 //
         public const ushort DEVINFO_DEF_STRING_MAX = 256;       // Since ARRAY (String only) can be represented by UCHAR, we can express up to 256 expressed in UCHAR //
@@ -43,7 +47,7 @@ namespace LumixWrapper {
             public uint dev_ModelName_Length;
         }
 
-        [StructLayout(LayoutKind.Sequential)]
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
         public struct LMX_CONNECT_DEVICE_INFO {
             public uint find_PnpDevice_Count;                            // Number of devices detected //
 
@@ -82,7 +86,7 @@ namespace LumixWrapper {
             public byte Available;
         }
 
-        [StructLayout(LayoutKind.Sequential)]
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
         public struct LMX_STRUCT_PTP_FORM_ENUM_UInt16 {
             public ushort NumOfVal;
 
@@ -92,17 +96,17 @@ namespace LumixWrapper {
             public byte Available;
         }
 
-        [StructLayout(LayoutKind.Sequential)]
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
         public struct LMX_STRUCT_PTP_FORM_ENUM_UInt32 {
             public ushort NumOfVal;
 
             [MarshalAs(UnmanagedType.ByValArray, SizeConst = LMX_DEF_USER_PTP_ARRAY_MAX)]
-            public uint[] SupportVal;
+            public int[] SupportVal;
 
             public byte Available;
         }
 
-        [StructLayout(LayoutKind.Sequential)]
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
         public struct LMX_STRUCT_PTP_FORM_RANGE_UInt16 {
             public ushort MinVal;
             public ushort MaxVal;
@@ -110,14 +114,14 @@ namespace LumixWrapper {
             public byte Available;
         }
 
-        [StructLayout(LayoutKind.Sequential)]
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
         public struct LMX_STRUCT_PTP_FORM_RANGE_UInt32 {
-            public uint MinVal;
-            public uint MaxVal;
-            public uint StepSize;
+            public int MinVal;
+            public int MaxVal;
+            public int StepSize;
             public byte Available;
         }
-     ;
+    ;
 
         //////////////////////////////////////////////////////////////////////////////////////////////////
         // 																								//
@@ -192,18 +196,18 @@ namespace LumixWrapper {
         // 																								//
         //////////////////////////////////////////////////////////////////////////////////////////////////
         public enum Lmx_event_id : uint {
-            LMX_DEF_LIB_EVENT_ID_ISO = 0x02000020,                      // Event/Callback registration ID:ISO information
-            LMX_DEF_LIB_EVENT_ID_SHUTTER = 0x02000030,                      // Event/Callback registration ID:ShutterSpeed information
-            LMX_DEF_LIB_EVENT_ID_APERTURE = 0x02000040,                     // Event/Callback registration ID:Aperture information
-            LMX_DEF_LIB_EVENT_ID_WHITEBALANCE = 0x02000050,                     // Event/Callback registration ID:WhiteBalance information
-            LMX_DEF_LIB_EVENT_ID_EXPOSURE = 0x02000060,                     // Event/Callback registration ID:Exposure
-            LMX_DEF_LIB_EVENT_ID_AF_CONFIG = 0x02000070,                        // Event/Callback registration ID:AF mode/AF area
-            LMX_DEF_LIB_EVENT_ID_REC_CTRL_RELEASE = 0x03000010,                     // Event/Callback registration ID:Shooting operation
-            LMX_DEF_LIB_EVENT_ID_REC_CTRL_AFAE = 0x03000020,                        // Event/Callback registration ID:Shooting operation
-            LMX_DEF_LIB_EVENT_ID_REC_CTRL_ZOOM = 0x03000080,                        // Event/Callback registration ID:Shooting operation
-            LMX_DEF_LIB_EVENT_ID_REC_CTRL_LENS = 0x03010010,                        // Event/Callback registration ID:Lens operation
-            LMX_DEF_LIB_EVENT_ID_OBJCT_ADD = 0x10000040,                        // Event/Callback registration ID:Object related notification:Add object
-            LMX_DEF_LIB_EVENT_ID_OBJCT_REQ_TRNSFER = 0x10000043,                        // Event/Callback registration ID:Object related notification:Transfer request
+            LMX_DEF_LIB_EVENT_ID_ISO = 0x02000020U,                      // Event/Callback registration ID:ISO information
+            LMX_DEF_LIB_EVENT_ID_SHUTTER = 0x02000030U,                      // Event/Callback registration ID:ShutterSpeed information
+            LMX_DEF_LIB_EVENT_ID_APERTURE = 0x02000040U,                     // Event/Callback registration ID:Aperture information
+            LMX_DEF_LIB_EVENT_ID_WHITEBALANCE = 0x02000050U,                     // Event/Callback registration ID:WhiteBalance information
+            LMX_DEF_LIB_EVENT_ID_EXPOSURE = 0x02000060U,                     // Event/Callback registration ID:Exposure
+            LMX_DEF_LIB_EVENT_ID_AF_CONFIG = 0x02000070U,                        // Event/Callback registration ID:AF mode/AF area
+            LMX_DEF_LIB_EVENT_ID_REC_CTRL_RELEASE = 0x03000010U,                     // Event/Callback registration ID:Shooting operation
+            LMX_DEF_LIB_EVENT_ID_REC_CTRL_AFAE = 0x03000020U,                        // Event/Callback registration ID:Shooting operation
+            LMX_DEF_LIB_EVENT_ID_REC_CTRL_ZOOM = 0x03000080U,                        // Event/Callback registration ID:Shooting operation
+            LMX_DEF_LIB_EVENT_ID_REC_CTRL_LENS = 0x03010010U,                        // Event/Callback registration ID:Lens operation
+            LMX_DEF_LIB_EVENT_ID_OBJCT_ADD = 0x10000040U,                        // Event/Callback registration ID:Object related notification:Add object
+            LMX_DEF_LIB_EVENT_ID_OBJCT_REQ_TRNSFER = 0x10000043U,                        // Event/Callback registration ID:Object related notification:Transfer request
         };
 
         //////////////////////////////////////////////////////////////////////////////////////////////////
@@ -259,8 +263,8 @@ namespace LumixWrapper {
         ////////////////////////////////////////////////////////////
         // DevicePropCode : 0xD001	Lumix Extension Exposure Time //
         ////////////////////////////////////////////////////////////
-        public enum Lmx_def_lib_DevpropEx_ShutterSpeed_param : ulong {
-            LMX_DEF_PTP_DEVPROP_EXT_LMX_SS_BULB = 0xFFFFFFFF,       // Bulb		//
+        public enum Lmx_def_lib_DevpropEx_ShutterSpeed_param : int {
+            LMX_DEF_PTP_DEVPROP_EXT_LMX_SS_BULB = -1,       // 0xFFFFFFFF  Bulb		//
             LMX_DEF_PTP_DEVPROP_EXT_LMX_SS_UNKNOWN = 0x0FFFFFFE,        //  SS unknown	//
             LMX_DEF_PTP_DEVPROP_EXT_LMX_SS_AUTO = 0x0FFFFFFF,       //  SS Auto	//
         }
@@ -1266,10 +1270,6 @@ namespace LumixWrapper {
             public UInt16 pitch;
         }
 
-        public const CallingConvention cc = CallingConvention.Cdecl;
-        public const UnmanagedType ut = UnmanagedType.LPWStr;
-        public bool disposedValue;
-
         /////////////////////////////////////////////////////////////////////
         //
         // Func     :LMX_func_api_Init
@@ -1346,15 +1346,15 @@ namespace LumixWrapper {
         //
         //--- Function definition for CallBack registration  ---//
         //typedef int (WINAPI* LMX_CALLBACK_FUNC) (UInt32, UInt32);
-        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        [UnmanagedFunctionPointer(CallingConvention.StdCall)]
         public delegate int LMX_CALLBACK_FUNC(uint param1, uint param2);
 
         //--- Function for registering callback function ---//
-        [DllImport(DLLNAME, ExactSpelling = true, CallingConvention = cc)]
+        [DllImport(DLLNAME, ExactSpelling = true, CallingConvention = CallingConvention.StdCall)]
         public static extern uint LMX_func_api_Reg_NotifyCallback(uint CallBackType, LMX_CALLBACK_FUNC appfunc);
 
         //--- Callback function registration deletion function ---//
-        [DllImport(DLLNAME, ExactSpelling = true, CallingConvention = cc)]
+        [DllImport(DLLNAME, ExactSpelling = true, CallingConvention = CallingConvention.StdCall)]
         public static extern uint LMX_func_api_Delete_CallBackInfo(uint CallBackType);
 
         ////////////////////////////////////////////////////////////////////
@@ -1384,10 +1384,10 @@ namespace LumixWrapper {
         public static extern byte LMX_func_api_SS_Get_Capability(ref LMX_STRUCT_SS_CAPA_INFO pSS_CapaInfo, out uint retError);
 
         [DllImport(DLLNAME, ExactSpelling = true, CallingConvention = cc)]
-        public static extern byte LMX_func_api_SS_Get_Param(out uint pulParam, out uint retError);
+        public static extern byte LMX_func_api_SS_Get_Param(out int pulParam, out uint retError);
 
         [DllImport(DLLNAME, ExactSpelling = true, CallingConvention = cc)]
-        public static extern byte LMX_func_api_SS_Set_Param(uint ulParam, out uint retError);
+        public static extern byte LMX_func_api_SS_Set_Param(long ulParam, out uint retError);
 
         [DllImport(DLLNAME, ExactSpelling = true, CallingConvention = cc)]
         public static extern byte LMX_func_api_SS_Get_RangeLimit(out uint pulMinParam, out uint pulMaxParam, out uint retError);
@@ -1596,13 +1596,13 @@ namespace LumixWrapper {
         // Object system:
         //
         [DllImport(DLLNAME, ExactSpelling = true, CallingConvention = cc)]
-        public static extern byte LMX_func_api_Get_Object(uint ObjectHandle, byte* lpStoreBufAdder, uint StoreBufSize, out uint retError);
+        public static extern byte LMX_func_api_Get_Object(uint ObjectHandle, ref byte lpStoreBufAdder, uint StoreBufSize, out uint retError);
 
         [DllImport(DLLNAME, ExactSpelling = true, CallingConvention = cc)]
         public static extern byte LMX_func_api_Get_Object_FormatType(uint ObjHandle, out uint pFormatType, out uint retError);
 
         [DllImport(DLLNAME, ExactSpelling = true, CallingConvention = cc)]
-        public static extern byte LMX_func_api_Get_Object_DataSize(uint ObjHandle, out ulong pDataSize, out uint retError);
+        public static extern byte LMX_func_api_Get_Object_DataSize(uint ObjHandle, out uint pDataSize, out uint retError);
 
         [DllImport(DLLNAME, ExactSpelling = true, CallingConvention = cc)]
         public static extern byte LMX_func_api_Get_Object_FileName(uint ObjHandle, ref LMX_STRUCT_PTP_ARRAY_STRING pFileName, out uint retError);
@@ -1610,7 +1610,7 @@ namespace LumixWrapper {
         [DllImport(DLLNAME, ExactSpelling = true, CallingConvention = cc)]
         public static extern byte LMX_func_api_Get_Partial_Object(
             uint ObjectHandle,
-            byte* lpStoreBufAdder,
+            ref byte lpStoreBufAdder,
             uint ui32_DataOffset,
             uint u32_SplitTransferBytes,
             out uint retError
@@ -1649,7 +1649,7 @@ namespace LumixWrapper {
             out uint pPostSize,
             ref LMX_STRUCT_LIVEVIEW_INFO_LEVEL pLevelBuf,
             out uint pLevelSize,
-            byte* pJpegBuf,
+            ref byte pJpegBuf,
             out uint pJpegSize,
             out uint retError
         );
