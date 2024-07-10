@@ -29,6 +29,7 @@ using System.IO;
 using System.Runtime.CompilerServices;
 using System.Runtime.Remoting;
 using System.Windows.Media.Imaging;
+using System.Reflection;
 
 namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
 
@@ -57,8 +58,12 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
 
         private LMX_STRUCT_ISO_CAPA_INFO Iso_CapaInfo = new LMX_STRUCT_ISO_CAPA_INFO();
         private LMX_STRUCT_SS_CAPA_INFO SS_CapaInfo = new LMX_STRUCT_SS_CAPA_INFO();
+        private LMX_STRUCT_RECINFO_CAMERA_MODE_CAPA_INFO CM_CapaInfo = new LMX_STRUCT_RECINFO_CAMERA_MODE_CAPA_INFO();
         private int _prevShutterSpeed;
         private TaskCompletionSource<object> _downloadExposure;// = new TaskCompletionSource<object>();
+        private CameraSpecs _currentCameraspecs = new CameraSpecs();
+
+        // Note: You might need to adjust sensor size data based on reliable sources.
 
         public LumixcameraDriver(IProfileService profileService, IExposureDataFactory exposureDataFactory, LumixCam.LMX_DEVINFO lmxDevInfo, LumixCam.LMX_CONNECT_DEVICE_INFO lmxConnetDeviceInfo, int index) {
             _profileService = profileService;
@@ -102,6 +107,8 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
             return 0;
         }
 
+        private Dictionary<string, CameraSpecs> lumixCameras;
+
         private void ExposureFinished(uint cb_event_param) {
             uint formatType;
             uint dataSize;
@@ -112,6 +119,9 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
             LMX_func_api_Get_Object_DataSize(cb_event_param, out dataSize, out retError);
             LMX_func_api_Get_Object_FileName(cb_event_param, ref fileNameArrStr, out retError);
             buffer = new byte[dataSize];
+            if (!formatType.IsEqual(Lmx_def_lib_object_format.LMX_DEF_OBJ_FORMAT_RAW)) {
+                Notification.ShowWarning("The Image format is not set to RAW");
+            }
 
             //_memoryStream = new MemoryStream(buffer);
             LMX_func_api_Get_Object(cb_event_param, ref buffer[0], dataSize, out retError);
@@ -155,7 +165,7 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
         public int CameraXSize { //harcoded for now
             get {
                 if (Connected) {
-                    return 3680;//_camera.ImageSize.Width;
+                    return _currentCameraspecs.Width;//_camera.ImageSize.Width;
                 } else {
                     return 0;
                 }
@@ -165,7 +175,7 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
         public int CameraYSize { //harcoded for now
             get {
                 if (Connected) {
-                    return 2760;//_camera.ImageSize.Width;
+                    return _currentCameraspecs.Height;//_camera.ImageSize.Width;
                 } else {
                     return 0;
                 }
@@ -205,9 +215,25 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
 
         public short MaxBinY { get => 1; set => throw new NotImplementedException(); }
 
-        public double PixelSizeX => 4.68;//hard coded for now
+        public double PixelSizeX {
+            get {
+                if (Connected) {
+                    return _currentCameraspecs.PixelPitch;
+                } else {
+                    return 0;
+                }
+            }
+        }
 
-        public double PixelSizeY => 4.68;//hard coded for now
+        public double PixelSizeY { //harcoded for now
+            get {
+                if (Connected) {
+                    return _currentCameraspecs.PixelPitch;
+                } else {
+                    return 0;
+                }
+            }
+        }
 
         public bool CanSetTemperature => false;
 
@@ -257,7 +283,7 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
 
         public int BatteryLevel => 100; //hardcoded for now
 
-        public int BitDepth => 12; // hardcoded for now
+        public int BitDepth => 14; // hardcoded for now
         public bool CanSetOffset => false;
 
         public int Offset { get => -1; set => throw new NotImplementedException(); }
@@ -405,11 +431,13 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
             }
         }
 
-        public string Description => "Description";
+        private Assembly assembly = Assembly.GetExecutingAssembly();
 
-        public string DriverInfo => "Driver Info";
+        public string Description => ((AssemblyDescriptionAttribute)assembly.GetCustomAttribute(typeof(AssemblyDescriptionAttribute))).Description;
 
-        public string DriverVersion => "DriverVersion";
+        public string DriverInfo => ((AssemblyTitleAttribute)assembly.GetCustomAttribute(typeof(AssemblyTitleAttribute))).Title;
+
+        public string DriverVersion => ((AssemblyFileVersionAttribute)assembly.GetCustomAttribute(typeof(AssemblyFileVersionAttribute))).Version;
 
         public IList<string> SupportedActions => new List<string>();
 
@@ -603,6 +631,14 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
 
                     ret = LMX_func_api_SS_Get_Capability(ref SS_CapaInfo, out retError);
                     ret = LMX_func_api_ISO_Get_Capability(ref Iso_CapaInfo, out retError);
+                    ret = LMX_func_api_CameraMode_Get_Capability(ref CM_CapaInfo, out retError);
+
+                    if (!CM_CapaInfo.CurVal_mode_drive.IsEqual(Lmx_def_lib_Camera_Mode_Info_Drive_Mode.LMX_DEF_CAMERA_MODE_INFO_DRIVE_MODE_SINGLE)) {
+                        Notification.ShowWarning("Camera is not in Single Shot Mode. Best to change");
+                    }
+                    if (!CM_CapaInfo.CurVal_mode_pos.IsEqual(Lmx_def_lib_Camera_Mode_Info_Mode_Pos.LMX_DEF_CAMERA_MODE_INFO_MODE_POS_M)) {
+                        Notification.ShowWarning("Camera is not in M mode. Disregard if in Custom mode");
+                    }
 
                     // Register callback function
                     // Get current parameter values
@@ -620,6 +656,30 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
                     returnV = LumixCam.LMX_func_api_Reg_NotifyCallback((uint)Lmx_event_id.LMX_DEF_LIB_EVENT_ID_SHUTTER, callback);
                     returnV = LumixCam.LMX_func_api_Reg_NotifyCallback((uint)Lmx_event_id.LMX_DEF_LIB_EVENT_ID_ISO, callback);
 
+                    lumixCameras = new Dictionary<string, CameraSpecs>
+                         {
+            { "DC-S1R", new CameraSpecs { Model = "DC-S1R", Width = 8368, Height = 5584, PixelPitch = 4.3 } },
+            { "DC-S1", new CameraSpecs { Model = "DC-S1", Width = 6000, Height = 4000, PixelPitch = 5.94 } },
+            { "DC-S1H", new CameraSpecs { Model = "DC-S1H", Width = 6000, Height = 4000, PixelPitch = 5.94 } },
+            { "DC-S5", new CameraSpecs { Model = "DC-S5", Width = 6000, Height = 4000, PixelPitch = 5.94 } },
+            { "DC-S5 II", new CameraSpecs { Model = "DC-S5 II", Width = 6000, Height = 4000, PixelPitch = 5.94 } },
+            { "DC-S5 IIX", new CameraSpecs { Model = "DC-S5 IIX", Width = 6000, Height = 4000, PixelPitch = 5.94 } },
+            { "DC-S9", new CameraSpecs { Model = "DC-S9", Width = 8192, Height = 5464, PixelPitch = (17.3/8192)*1000} },
+            { "DC-BGH1", new CameraSpecs { Model = "DC-BGH1", Width = 3680, Height = 2760, PixelPitch = 4.68 } },
+            { "DC-BGS1", new CameraSpecs { Model = "DC-BGS1", Width = 6000, Height = 4000, PixelPitch = 5.91 } },
+            { "DC-GH6", new CameraSpecs { Model = "DC-GH6", Width = 5776 , Height = 4336, PixelPitch = 3 } },
+            { "DC-GH5", new CameraSpecs { Model = "DC-GH5", Width = 5184, Height = 3888, PixelPitch = 3.33 } },
+            { "DC-GH5S", new CameraSpecs { Model = "DC-GH5S", Width = 3680 , Height = 2760, PixelPitch = 4.68 } },
+            { "DC-GH5 II", new CameraSpecs { Model = "GH5 II", Width = 5184, Height = 3888, PixelPitch = 3.33} },
+            { "DC-G9", new CameraSpecs { Model = "DC-G9", Width = 5184, Height = 3888, PixelPitch = 3.33 } },
+            { "DC-G9 II", new CameraSpecs { Model = "DC-G9 II", Width = 5184, Height = 3888, PixelPitch = 3.33 } },
+            { "DefaultLumix", new CameraSpecs { Model = "DefaultLumix", Width = 6000, Height = 4000, PixelPitch = 5.9 } }
+        };
+
+                    if (!lumixCameras.TryGetValue(_lmxDevInfo.dev_ModelName, out _currentCameraspecs)) {
+                        Notification.ShowWarning("Camera is not known defaulting to full size sensor values");
+                        lumixCameras.TryGetValue("DefaultLumix", out _currentCameraspecs);
+                    }
                     //not useful in Nina context
                     //returnV = LumixCam.LMX_func_api_Reg_NotifyCallback((uint)Lmx_event_id.LMX_DEF_LIB_EVENT_ID_APERTURE, callback);
                     //returnV = LumixCam.LMX_func_api_Reg_NotifyCallback((uint)Lmx_event_id.LMX_DEF_LIB_EVENT_ID_WHITEBALANCE, callback);

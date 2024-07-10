@@ -1706,4 +1706,11 @@ namespace LumixWrapper {
             Dispose(true);
         }
     }
+
+    public class CameraSpecs {
+        public string Model { get; set; }
+        public int Width { get; set; }  // in pixels
+        public int Height { get; set; } // in pixels
+        public double PixelPitch { get; set; } // in microns
+    }
 }
