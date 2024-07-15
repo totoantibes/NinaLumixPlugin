@@ -13,6 +13,7 @@ on:
 env:
   # Adjust this to your plugin title
   PLUGIN_NAME: "LumixPlugin"
+  PLUGIN_FILE_NAME: "Roberthasson.NINA.Lumixcamera"
 
 jobs:
   build-and-release:
@@ -45,8 +46,8 @@ jobs:
       # Add all necessary files that the plugin needs to the packages folder - basically all items that are normally in your post build event on your local builds
       - name: Prepare package
         run: |
-          Copy-Item "${{ env.PLUGIN_NAME }}/bin/Release/net8.0-windows/${{ env.PLUGIN_NAME }}.dll" "packages/${{ env.PLUGIN_NAME }}/${{ env.PLUGIN_NAME }}.dll" -Force
-          Copy-Item "${{ env.PLUGIN_NAME }}/bin/Release/net8.0-windows/${{ env.PLUGIN_NAME }}.pdb" "packages/${{ env.PLUGIN_NAME }}/${{ env.PLUGIN_NAME }}.pdb" -Force
+          Copy-Item "${{ env.PLUGIN_NAME }}/bin/Release/net8.0-windows/${{ env.PLUGIN_FILE_NAME }}.dll" "packages/${{ env.PLUGIN_NAME }}/${{ env.PLUGIN_NAME }}.dll" -Force
+          Copy-Item "${{ env.PLUGIN_NAME }}/bin/Release/net8.0-windows/${{ env.PLUGIN_FILE_NAME }}.pdb" "packages/${{ env.PLUGIN_NAME }}/${{ env.PLUGIN_NAME }}.pdb" -Force
       
       - name: Create Plugin archives and manifests
         run: |
