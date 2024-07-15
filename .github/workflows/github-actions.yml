@@ -12,7 +12,7 @@ on:
 
 env:
   # Adjust this to your plugin title
-  PLUGIN_NAME: "Lumixcamera"
+  PLUGIN_NAME: "LumixPlugin"
 
 jobs:
   build-and-release:
