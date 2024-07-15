@@ -33,7 +33,7 @@ jobs:
       - name: Determine Version
         id: version
         run: |
-          if [ "${{ github.ref_name }}" = "refs/heads/main" ] || [ "${{ github.ref_name }}" = "refs/heads/master" ]; then
+          if ( "${{ github.ref_name }}" = "refs/heads/main" ] || [ "${{ github.ref_name }}" = "refs/heads/master" ); then
             echo "::set-output name=version::1.0.0.0"
           else
             echo "::set-output name=version::${{ github.ref_name }}"
