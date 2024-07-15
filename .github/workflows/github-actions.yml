@@ -32,9 +32,12 @@ jobs:
 
       - name: Determine Version
         id: version
-        run: echo "::set-output name=version::${{ github.ref_name != 'refs/heads/main' && github.ref_name != 'refs/heads/master' ? github.ref_name = '1.0.0.0' }}"
-
-
+        run: |
+          if [ "${{ github.ref_name }}" = "refs/heads/main" ] || [ "${{ github.ref_name }}" = "refs/heads/master" ]; then
+            echo "::set-output name=version::1.0.0.0"
+          else
+            echo "::set-output name=version::${{ github.ref_name }}"
+          fi
       # This will build your solution. If the solution name differs from your plugin name, please adjust it here
       - name: Build .NET Assemblies
         run: |
