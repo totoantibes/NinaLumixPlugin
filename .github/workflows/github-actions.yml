@@ -1,0 +1,84 @@
+# This is a sample github action to build and release your plugin using a github action
+# It will run when pushing a new tag - the tag name must be your plugin version number (e.g. "1.0.0.0")
+# Replace and adjust the areas that are commented below
+# Place it into the workflow folder of your repository at .github/workflows
+name: Build and Release
+
+# Every time a new tag with the typical assembly format is pushed this will run. e.g. tag name "1.0.0.0"
+on:
+  push:
+    tags:
+      - '[0-9]+.[0-9]+.[0-9]+.[0-9]+'
+
+env:
+  # Adjust this to your plugin title
+  PLUGIN_NAME: "MyPlugin"
+
+jobs:
+  build-and-release:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      # In case you need more sub folders add these here
+      - name: Prepare folders
+        run: |
+          mkdir packages
+          mkdir packages/${{ PLUGIN_NAME }}
+
+      # This will build your solution. If the solution name differs from your plugin name, please adjust it here
+      - name: Build .NET Assemblies
+        run: |
+          dotnet restore
+          dotnet build ${{ PLUGIN_NAME }}.sln -c Release -p:PostBuildEvent= -p:Version=${{ github.ref_name }}
+
+      # If you have mkdocs documentation you want to include, you can uncomment and build it like this
+      # - name: Build Documentation
+      #   run: |
+      #     python -m pip install --upgrade pip
+      #     pip install mkdocs
+      #     pip install mkdocs-material
+      #     mkdocs build -f ${{ PLUGIN_NAME }}\docs\mkdocs.yml
+
+
+      # Add all necessary files that the plugin needs to the packages folder - basically all items that are normally in your post build event on your local builds
+      - name: Prepare package
+        run: |
+          Copy-Item "${{ PLUGIN_NAME }}/bin/Release/net8.0-windows/${{ PLUGIN_NAME }}.dll" "packages/${{ PLUGIN_NAME }}/${{ PLUGIN_NAME }}.dll" -Force
+          Copy-Item "${{ PLUGIN_NAME }}/bin/Release/net8.0-windows/${{ PLUGIN_NAME }}.pdb" "packages/${{ PLUGIN_NAME }}/${{ PLUGIN_NAME }}.pdb" -Force
+      
+      - name: Create Plugin archives and manifests
+        run: |
+          curl https://api.bitbucket.org/2.0/repositories/isbeorn/nina.plugin.manifests/src/main/tools/CreateNET7Manifest.ps1 >> CreateNET7Manifest.ps1
+          pwsh CreateNET7Manifest.ps1 -file packages/${{ PLUGIN_NAME }}/${{ PLUGIN_NAME }}.dll -installerUrl https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/${{ PLUGIN_NAME }}.${{ github.ref_name }}.zip -createArchive -includeAll -appendVersionToArchive
+          Rename-Item -Path "manifest.json" -NewName "${{ PLUGIN_NAME }}.${{ github.ref_name }}.manifest.json" 
+
+      - name: Create Release
+        id: create_release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ github.ref_name }}
+          release_name: Release ${{ github.ref_name }}
+          draft: false
+          prerelease: false
+      - name: Upload Plugin Zip
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ./${{ PLUGIN_NAME }}.${{ github.ref_name }}.zip
+          asset_name: ${{ PLUGIN_NAME }}.${{ github.ref_name }}.zip
+          asset_content_type: application/zip
+      - name: Upload Manifest
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ./${{ PLUGIN_NAME }}.${{ github.ref_name }}.manifest.json
+          asset_name: ${{ PLUGIN_NAME }}.${{ github.ref_name }}.manifest.json
+          asset_content_type: application/json
