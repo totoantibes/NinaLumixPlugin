@@ -12,7 +12,7 @@ on:
 
 env:
   # Adjust this to your plugin title
-  PLUGIN_NAME: "Roberthasson.NINA.Lumixcamera"
+  PLUGIN_NAME: "Lumixcamera"
 
 jobs:
   build-and-release:
@@ -31,7 +31,7 @@ jobs:
       - name: Build .NET Assemblies
         run: |
           dotnet restore
-          dotnet build ${{ env.env.PLUGIN_NAME }}.sln -c Release -p:PostBuildEvent= -p:Version=${{ github.ref_name }}
+          dotnet build ${{ env.PLUGIN_NAME }}.sln -c Release -p:PostBuildEvent= -p:Version=${{ github.ref_name }}
 
       # If you have mkdocs documentation you want to include, you can uncomment and build it like this
       # - name: Build Documentation
