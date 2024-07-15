@@ -9,7 +9,6 @@ on:
   push:
     tags:
       - '[0-9]+.[0-9]+.[0-9]+.[0-9]+'
-  workflow_dispatch:
 
 env:
   # Adjust this to your plugin title
@@ -30,14 +29,6 @@ jobs:
          mkdir packages
          mkdir packages/${{ env.PLUGIN_NAME }}
 
-      - name: Determine Version
-        id: version
-        run: |
-          if (( "${{ github.ref_name }}" = "refs/heads/main" ) || ( "${{ github.ref_name }}" = "refs/heads/master" )) then
-            echo "::set-output name=version::1.0.0.0"
-          else
-            echo "::set-output name=version::${{ github.ref_name }}"
-          fi
       # This will build your solution. If the solution name differs from your plugin name, please adjust it here
       - name: Build .NET Assemblies
         run: |
@@ -67,7 +58,6 @@ jobs:
 
       - name: Create Release
         id: create_release
-        if: startsWith(github.ref, 'refs/tags/')
         uses: actions/create-release@v1
         with:
           tag_name: ${{ github.ref_name }}
@@ -76,7 +66,6 @@ jobs:
           prerelease: false
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Upload Plugin Zip
-        if: startsWith(github.ref, 'refs/tags/')
         uses: actions/upload-release-asset@v1
         with:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -85,7 +74,6 @@ jobs:
           asset_name: ${{ env.PLUGIN_NAME }}.${{ github.ref_name }}.zip
           asset_content_type: application/zip
       - name: Upload Manifest
-        if: startsWith(github.ref, 'refs/tags/')
         uses: actions/upload-release-asset@v1
         with:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
