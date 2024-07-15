@@ -16,7 +16,8 @@ The driver cannot set the Shutter Mode (e.g. A, S, P, or more importantly M). Th
 
 # Known Limitations
 * As mentioned above, the published SDK only exposes a subset of the functions. in fact the [Lumix tether applications](https://av.jpn.support.panasonic.com/support/global/cs/soft/download/d_lumixtether.html) provides much finer capabilities like battery information or Bulb operations. After my request Panasonic acknowledged the different capabilities with no plan to publish the more advanced features via an SDK.
-* Lumix RAW data assume a 14 bit depth. Overriding the bitdepth is also possible from the settings page.The RW2 format is not supported by the DCRaw implementation included in N.I.N.A. Hence you need to set the raw decoded to FreeImage in the camera advanced settings in the equipment settings tab. Hopefully libraw will be supported by N.I.N.A. which is more current than DCRaw.
+* Lumix RAW data assume a 14 bit depth. Overriding the bitdepth is also possible from the settings page.
+* The RW2 format is not supported by the DCRaw implementation included in N.I.N.A. Hence you need to set the raw decoded to FreeImage in the camera advanced settings in the equipment settings tab. Hopefully libraw will be supported by N.I.N.A. which is more current than DCRaw.
 * Since Bulb is not supported the driver will set the exposure to a supported shutter speed. In case the speed is not supported by the camera it will fail setting it up and will default to the previous known value.
 * N.I.N.A. will know about the exposure termination when the camera writes the image to the SD card.
 
