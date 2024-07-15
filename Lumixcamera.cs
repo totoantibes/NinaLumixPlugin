@@ -112,12 +112,45 @@ namespace Roberthasson.NINA.Lumixcamera {
             return Task.CompletedTask;
         }
 
-        public string DefaultNotificationMessage {
+        public int SensorWidth {
             get {
-                return Settings.Default.DefaultNotificationMessage;
+                return Settings.Default.SensorWidth;
             }
             set {
-                Settings.Default.DefaultNotificationMessage = value;
+                Settings.Default.SensorWidth = value;
+                CoreUtil.SaveSettings(Settings.Default);
+                RaisePropertyChanged();
+            }
+        }
+
+        public int BitDepth {
+            get {
+                return Settings.Default.BitDepth;
+            }
+            set {
+                Settings.Default.BitDepth = value;
+                CoreUtil.SaveSettings(Settings.Default);
+                RaisePropertyChanged();
+            }
+        }
+
+        public int SensorHeight {
+            get {
+                return Settings.Default.SensorHeight;
+            }
+            set {
+                Settings.Default.SensorHeight = value;
+                CoreUtil.SaveSettings(Settings.Default);
+                RaisePropertyChanged();
+            }
+        }
+
+        public double PixelPitch {
+            get {
+                return Settings.Default.PixelPitch;
+            }
+            set {
+                Settings.Default.PixelPitch = value;
                 CoreUtil.SaveSettings(Settings.Default);
                 RaisePropertyChanged();
             }

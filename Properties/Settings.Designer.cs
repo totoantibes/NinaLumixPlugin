@@ -37,13 +37,49 @@ namespace Roberthasson.NINA.Lumixcamera.Properties {
         
         [global::System.Configuration.UserScopedSettingAttribute()]
         [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
-        [global::System.Configuration.DefaultSettingValueAttribute("This is a notification")]
-        public string DefaultNotificationMessage {
+        [global::System.Configuration.DefaultSettingValueAttribute("0")]
+        public int SensorWidth {
             get {
-                return ((string)(this["DefaultNotificationMessage"]));
+                return ((int)(this["SensorWidth"]));
             }
             set {
-                this["DefaultNotificationMessage"] = value;
+                this["SensorWidth"] = value;
+            }
+        }
+        
+        [global::System.Configuration.UserScopedSettingAttribute()]
+        [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
+        [global::System.Configuration.DefaultSettingValueAttribute("0")]
+        public int SensorHeight {
+            get {
+                return ((int)(this["SensorHeight"]));
+            }
+            set {
+                this["SensorHeight"] = value;
+            }
+        }
+        
+        [global::System.Configuration.UserScopedSettingAttribute()]
+        [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
+        [global::System.Configuration.DefaultSettingValueAttribute("0")]
+        public double PixelPitch {
+            get {
+                return ((double)(this["PixelPitch"]));
+            }
+            set {
+                this["PixelPitch"] = value;
+            }
+        }
+        
+        [global::System.Configuration.UserScopedSettingAttribute()]
+        [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
+        [global::System.Configuration.DefaultSettingValueAttribute("0")]
+        public int BitDepth {
+            get {
+                return ((int)(this["BitDepth"]));
+            }
+            set {
+                this["BitDepth"] = value;
             }
         }
     }

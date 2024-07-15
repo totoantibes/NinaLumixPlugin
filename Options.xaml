@@ -7,13 +7,41 @@
     <!--  Furthermore the Resource Dictionary has to be exported via code behind export attributes  -->
     <DataTemplate x:Key="LumixCamera_Options">
         <StackPanel Orientation="Vertical">
-            <StackPanel Orientation="Horizontal">
+            <!--<StackPanel Orientation="Horizontal">
                 <TextBlock Text="Default Notification Message" />
                 <TextBox MinWidth="50" Text="{Binding DefaultNotificationMessage}" />
             </StackPanel>
             <StackPanel Orientation="Horizontal">
                 <TextBlock Text="Profile Specific Notification Message" />
                 <TextBox MinWidth="50" Text="{Binding ProfileSpecificNotificationMessage}" />
+            </StackPanel>-->
+            <StackPanel Orientation="Horizontal">
+                <TextBlock>
+                    <TextBlock.Text>Override Sensor Width</TextBlock.Text>
+                    <TextBlock.ToolTip>In case the camera is not recognized or the embedded sensor values are not correct insert here in pixels the true value or 0 to use the sdk values</TextBlock.ToolTip>
+                </TextBlock>
+                <TextBox MinWidth="50" Text="{Binding SensorWidth}" />
+            </StackPanel>
+            <StackPanel Orientation="Horizontal">
+                <TextBlock>
+                    <TextBlock.Text>Override Sensor Height</TextBlock.Text>
+                    <TextBlock.ToolTip>In case the camera is not recognized or the embedded sensor values are not correct insert here in pixels the true value or 0 to use the sdk values</TextBlock.ToolTip>
+                </TextBlock>
+                <TextBox MinWidth="50" Text="{Binding SensorHeight}" />
+            </StackPanel>
+            <StackPanel Orientation="Horizontal">
+                <TextBlock>
+                    <TextBlock.Text>Override Pixel Pitch</TextBlock.Text>
+                    <TextBlock.ToolTip>In case the camera is not recognized or the embedded sensor values are not correct insert here in pixels the true value or 0 to use the sdk values</TextBlock.ToolTip>
+                </TextBlock>
+                <TextBox MinWidth="50" Text="{Binding PixelPitch}" />
+            </StackPanel>
+            <StackPanel Orientation="Horizontal">
+                <TextBlock>
+                    <TextBlock.Text>Override Bit Depth</TextBlock.Text>
+                    <TextBlock.ToolTip>Default driver uses bit depth of 14. if you prefer another enter it here</TextBlock.ToolTip>
+                </TextBlock>
+                <TextBox MinWidth="50" Text="{Binding BitDepth}" />
             </StackPanel>
         </StackPanel>
     </DataTemplate>

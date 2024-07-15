@@ -34,11 +34,9 @@ using System.Reflection;
 namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
 
     /// <summary>
-    /// This Class shows the basic principle on how to add a new Device driver to N.I.N.A. via the plugin interface
-    /// The DeviceProvider will return an instance of this class as a sample weather device
-    /// For this example the weather data will generate random numbers
+    /// This Class implements a camera driver plugin instance for the native lumix SDK
     /// </summary>
-    public class LumixcameraDriver : BaseINPC, ICamera {
+    public class LumixcameraDriver : BaseINPC, ISettings, ICamera {
         private IProfileService _profileService;
         private readonly IExposureDataFactory _exposureDataFactory;
         private LMX_DEVINFO _lmxDevInfo = new LMX_DEVINFO();
@@ -54,16 +52,14 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
 
         private TaskCompletionSource<bool> _cameraConnected;
         private MemoryStream _memoryStream;
-        private LMX_CALLBACK_FUNC callback;//= new LMX_CALLBACK_FUNC(NotifyCallbackFunction);
+        private LMX_CALLBACK_FUNC callback;
 
         private LMX_STRUCT_ISO_CAPA_INFO Iso_CapaInfo = new LMX_STRUCT_ISO_CAPA_INFO();
         private LMX_STRUCT_SS_CAPA_INFO SS_CapaInfo = new LMX_STRUCT_SS_CAPA_INFO();
         private LMX_STRUCT_RECINFO_CAMERA_MODE_CAPA_INFO CM_CapaInfo = new LMX_STRUCT_RECINFO_CAMERA_MODE_CAPA_INFO();
         private int _prevShutterSpeed;
-        private TaskCompletionSource<object> _downloadExposure;// = new TaskCompletionSource<object>();
+        private TaskCompletionSource<object> _downloadExposure;
         private CameraSpecs _currentCameraspecs = new CameraSpecs();
-
-        // Note: You might need to adjust sensor size data based on reliable sources.
 
         public LumixcameraDriver(IProfileService profileService, IExposureDataFactory exposureDataFactory, LumixCam.LMX_DEVINFO lmxDevInfo, LumixCam.LMX_CONNECT_DEVICE_INFO lmxConnetDeviceInfo, int index) {
             _profileService = profileService;
@@ -123,8 +119,7 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
                 Notification.ShowWarning("The Image format is not set to RAW");
             }
 
-            //_memoryStream = new MemoryStream(buffer);
-            LMX_func_api_Get_Object(cb_event_param, ref buffer[0], dataSize, out retError);
+            try { LMX_func_api_Get_Object(cb_event_param, ref buffer[0], dataSize, out retError); } catch (Exception ex) { }
 
             _downloadExposure.TrySetResult(null);
             return;
@@ -162,36 +157,42 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
 
         public short BayerOffsetY { get => 1; set => throw new NotImplementedException(); }
 
-        public int CameraXSize { //harcoded for now
+        public int CameraXSize {
             get {
                 if (Connected) {
-                    return _currentCameraspecs.Width;//_camera.ImageSize.Width;
+                    return _currentCameraspecs.Width;
                 } else {
                     return 0;
                 }
             }
         }
 
-        public int CameraYSize { //harcoded for now
+        public int CameraYSize {
             get {
                 if (Connected) {
-                    return _currentCameraspecs.Height;//_camera.ImageSize.Width;
+                    return _currentCameraspecs.Height;
                 } else {
                     return 0;
                 }
             }
         }
+
+        private IList<int> _exposures;
 
         public double ExposureMin {
             get {
                 double _exp = 120;
                 if (Connected) {
-                    //foreach (uint val in SS_CapaInfo.Capa_Enum.SupportVal) {
-                    //    //if (val != 0 && !val.IsEqual(Lmx_def_lib_DevpropEx_ShutterSpeed_param.LMX_DEF_PTP_DEVPROP_EXT_LMX_SS_UNKNOWN) && !val.IsEqual(Lmx_def_lib_DevpropEx_ShutterSpeed_param.LMX_DEF_PTP_DEVPROP_EXT_LMX_SS_BULB) && !val.IsEqual(Lmx_def_lib_DevpropEx_ShutterSpeed_param.LMX_DEF_PTP_DEVPROP_EXT_LMX_SS_AUTO)) {
-                    //    if ((val & 0x80000000) == 0x00000000) {
-                    //        _exp = Math.Max(val, _exp);
-                    //    }
-                    //}
+                    if (_exposures.IsEqual(null)) {
+                        _exposures = new List<int>();
+                        foreach (uint val in SS_CapaInfo.Capa_Enum.SupportVal) {
+                            //if (val != 0 && !val.IsEqual(Lmx_def_lib_DevpropEx_ShutterSpeed_param.LMX_DEF_PTP_DEVPROP_EXT_LMX_SS_UNKNOWN) && !val.IsEqual(Lmx_def_lib_DevpropEx_ShutterSpeed_param.LMX_DEF_PTP_DEVPROP_EXT_LMX_SS_BULB) && !val.IsEqual(Lmx_def_lib_DevpropEx_ShutterSpeed_param.LMX_DEF_PTP_DEVPROP_EXT_LMX_SS_AUTO)) {
+                            if ((val & 0x80000000) != 0x00000000) {
+                                _exposures.Add((int)(val & 0x7fffffff) / 1000);
+                                //_exp = Math.Max(val, _exp);
+                            }
+                        }
+                    }
                     _exp = SS_CapaInfo.CurVal_Range.MaxVal;
                     return ((double)(1 / (_exp / 1000)));
                 } else { return 0; }
@@ -201,12 +202,14 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
         public double ExposureMax {
             get {
                 if (Connected) {
-                    if (SS_CapaInfo.Capa_Enum.SupportVal[0] == (int)((Lmx_def_lib_DevpropEx_ShutterSpeed_param.LMX_DEF_PTP_DEVPROP_EXT_LMX_SS_BULB))) {
-                        bulbFound = true;
-                        return double.PositiveInfinity;
-                    } else {
-                        return ((double)(SS_CapaInfo.CurVal_Range.MinVal / 1000));
-                    }
+                    // TO DO in case BULB is supported
+
+                    //if (SS_CapaInfo.Capa_Enum.SupportVal[0] == (int)((Lmx_def_lib_DevpropEx_ShutterSpeed_param.LMX_DEF_PTP_DEVPROP_EXT_LMX_SS_BULB))) {
+                    //    bulbFound = true;
+                    //    return double.PositiveInfinity;
+                    //} else {
+                    return ((double)(SS_CapaInfo.CurVal_Range.MinVal & 0x7fffffff) / 1000);
+                    //}
                 } else { return 0; }
             }
         }
@@ -225,7 +228,7 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
             }
         }
 
-        public double PixelSizeY { //harcoded for now
+        public double PixelSizeY {
             get {
                 if (Connected) {
                     return _currentCameraspecs.PixelPitch;
@@ -283,7 +286,16 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
 
         public int BatteryLevel => 100; //hardcoded for now
 
-        public int BitDepth => 14; // hardcoded for now
+        public int BitDepth {
+            get {
+                if (Properties.Settings.Default.BitDepth != 0) {
+                    return Properties.Settings.Default.BitDepth;
+                } else {
+                    return 14;
+                }
+            }
+        }
+
         public bool CanSetOffset => false;
 
         public int Offset { get => -1; set => throw new NotImplementedException(); }
@@ -481,35 +493,41 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
                 lmx_rec_ctrl.CtrlID = ((uint)Lmx_TagID_Rec_Ctrl_Release.LMX_DEF_LIB_TAG_REC_CTRL_RELEASE_ONESHOT);
                 lmx_rec_ctrl.ParamData.NumOfVal = 0;
                 double exposureTime = sequence.ExposureTime;
+
                 Logger.Debug("Prepare start of exposure: " + sequence);
                 _downloadExposure = new TaskCompletionSource<object>();
-                if (exposureTime <= 30.0 && exposureTime >= 1) {
-                    Logger.Debug(" 1 <= Exposuretime <= 30. Setting automatic shutter speed.");
-                    LMX_func_api_SS_Set_Param((((int)(exposureTime) * 1000) | 0x80000000), out uint retError);
+                if (exposureTime <= 60.0 && exposureTime >= 1) {
+                    if (_exposures.Contains((int)exposureTime)) {
+                        Logger.Debug(" 1 <= Exposuretime <= 60. Setting automatic shutter speed.");
+                        LMX_func_api_SS_Set_Param((((int)(exposureTime) * 1000) | 0x80000000), out uint retError);
+                    } else {
+                        Notification.ShowWarning("Exposure is not in the allowed list of exposures. Will take a 1 sec exposure or the last good setting");
+                    }
                 } else {
                     if (exposureTime < 1) {
                         Logger.Debug(" Exposuretime < 1. Setting automatic shutter speed.");
                         LMX_func_api_SS_Set_Param((int)(1000 / exposureTime), out uint retError);
                     } else {
-                        /*Stop Exposure after exposure time or upon cancellation*/
-                        try { bulbCompletionCTS?.Cancel(); } catch { }
-                        bulbCompletionCTS = new CancellationTokenSource();
-                        Logger.Debug("Use Bulb capture");
-                        LMX_func_api_SS_Set_Param((int)(Lmx_def_lib_DevpropEx_ShutterSpeed_param.LMX_DEF_PTP_DEVPROP_EXT_LMX_SS_BULB), out uint retError);
+                        Notification.ShowWarning("Bulb Mode is not supported by the SDK. Max exposure time in 60s");
+                        ///*Stop Exposure after exposure time or upon cancellation*/
+                        //try { bulbCompletionCTS?.Cancel(); } catch { }
+                        //bulbCompletionCTS = new CancellationTokenSource();
+                        //Logger.Debug("Use Bulb capture");
+                        //LMX_func_api_SS_Set_Param((int)(Lmx_def_lib_DevpropEx_ShutterSpeed_param.LMX_DEF_PTP_DEVPROP_EXT_LMX_SS_BULB), out uint retError);
 
-                        try {
-                            Logger.Debug("Starting bulb capture");
-                            Task.Run(() => LMX_func_api_Rec_Ctrl_Release(ref lmx_rec_ctrl, out retError));
-                        } catch (Exception ex) {
-                            Logger.Error(ex);
-                        }
-                        /*Stop Exposure after exposure time */
-                        bulbCompletionTask = Task.Run(async () => {
-                            await CoreUtil.Wait(TimeSpan.FromSeconds(exposureTime), bulbCompletionCTS.Token);
-                            if (!bulbCompletionCTS.IsCancellationRequested) {
-                                StopExposure();
-                            }
-                        }, bulbCompletionCTS.Token);
+                        //try {
+                        //    Logger.Debug("Starting bulb capture");
+                        //    Task.Run(() => LMX_func_api_Rec_Ctrl_Release(ref lmx_rec_ctrl, out retError));
+                        //} catch (Exception ex) {
+                        //    Logger.Error(ex);
+                        //}
+                        ///*Stop Exposure after exposure time */
+                        //bulbCompletionTask = Task.Run(async () => {
+                        //    await CoreUtil.Wait(TimeSpan.FromSeconds(exposureTime), bulbCompletionCTS.Token);
+                        //    if (!bulbCompletionCTS.IsCancellationRequested) {
+                        //        StopExposure();
+                        //    }
+                        //}, bulbCompletionCTS.Token);
 
                         return;
                     }
@@ -578,7 +596,6 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
 
         public Task<IExposureData> DownloadLiveView(CancellationToken token) {
             return Task.Run<IExposureData>(() => {
-                //CanShowLiveView
                 // liveview structures
                 uint returnedJpegSize;
                 byte[] jpegDataPos = new byte[LMX_DEF_LIVEVIEW_STREAMDATA_SIZE_MAX];
@@ -622,7 +639,6 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
         }
 
         public Task<bool> Connect(CancellationToken token) {
-            //throw new NotImplementedException();
             return Task.Run<bool>(() => {
                 try {
                     //connect to device
@@ -636,11 +652,10 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
                     if (!CM_CapaInfo.CurVal_mode_drive.IsEqual(Lmx_def_lib_Camera_Mode_Info_Drive_Mode.LMX_DEF_CAMERA_MODE_INFO_DRIVE_MODE_SINGLE)) {
                         Notification.ShowWarning("Camera is not in Single Shot Mode. Best to change");
                     }
-                    if (!CM_CapaInfo.CurVal_mode_pos.IsEqual(Lmx_def_lib_Camera_Mode_Info_Mode_Pos.LMX_DEF_CAMERA_MODE_INFO_MODE_POS_M)) {
-                        Notification.ShowWarning("Camera is not in M mode. Disregard if in Custom mode");
+                    if (CM_CapaInfo.CurVal_mode_pos.IsEqual(Lmx_def_lib_Camera_Mode_Info_Mode_Pos.LMX_DEF_CAMERA_MODE_INFO_MODE_POS_A) || CM_CapaInfo.CurVal_mode_pos.IsEqual(Lmx_def_lib_Camera_Mode_Info_Mode_Pos.LMX_DEF_CAMERA_MODE_INFO_MODE_POS_P) || CM_CapaInfo.CurVal_mode_pos.IsEqual(Lmx_def_lib_Camera_Mode_Info_Mode_Pos.LMX_DEF_CAMERA_MODE_INFO_MODE_POS_S)) {
+                        Notification.ShowWarning("Camera is not in M mode. Best To Change");
                     }
 
-                    // Register callback function
                     // Get current parameter values
                     ret = LumixCam.LMX_func_api_ISO_Get_Param(out _curIsoValue, out retError);
                     ret = LumixCam.LMX_func_api_SS_Get_Param(out _curSsValue, out retError);
@@ -677,9 +692,23 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
         };
 
                     if (!lumixCameras.TryGetValue(_lmxDevInfo.dev_ModelName, out _currentCameraspecs)) {
-                        Notification.ShowWarning("Camera is not known defaulting to full size sensor values");
+                        Notification.ShowWarning("Camera is not known. Defaulting to full size sensor values");
                         lumixCameras.TryGetValue("DefaultLumix", out _currentCameraspecs);
+                        Notification.ShowWarning("Overriding Height from Plugin Settings");
                     }
+                    if (Properties.Settings.Default.SensorHeight != 0) {
+                        _currentCameraspecs.Height = Properties.Settings.Default.SensorHeight;
+                        Notification.ShowWarning("Overriding Height from Plugin Settings");
+                    }
+                    if (Properties.Settings.Default.PixelPitch != 0) {
+                        _currentCameraspecs.PixelPitch = Properties.Settings.Default.PixelPitch;
+                        Notification.ShowWarning("Overriding Pitch from Plugin Settings");
+                    }
+                    if (Properties.Settings.Default.SensorWidth != 0) {
+                        _currentCameraspecs.Width = Properties.Settings.Default.SensorWidth;
+                        Notification.ShowWarning("Overriding Width from Plugin Settings");
+                    }
+
                     //not useful in Nina context
                     //returnV = LumixCam.LMX_func_api_Reg_NotifyCallback((uint)Lmx_event_id.LMX_DEF_LIB_EVENT_ID_APERTURE, callback);
                     //returnV = LumixCam.LMX_func_api_Reg_NotifyCallback((uint)Lmx_event_id.LMX_DEF_LIB_EVENT_ID_WHITEBALANCE, callback);
@@ -697,7 +726,6 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
         }
 
         public void Disconnect() {
-            //throw new NotImplementedException();
             if (Connected) {
                 try {
                     //returnV = LumixCam.LMX_func_api_Delete_CallBackInfo(callback);
