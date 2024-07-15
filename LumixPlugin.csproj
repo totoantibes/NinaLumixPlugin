@@ -17,6 +17,7 @@
     <None Remove="Library\Lmx_lib_type.h" />
     <None Remove="Library\LumixDriver.i" />
     <None Remove="Library\LumixDriver_wrap.c" />
+    <None Remove="Lumix_logo.svg" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="ClangSharp.PInvokeGenerator" Version="18.1.0" />
