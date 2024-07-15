@@ -28,7 +28,7 @@ jobs:
         run: |
          mkdir packages
          mkdir packages/${{ env.PLUGIN_NAME }}
-
+         mkdir packages/${{ env.PLUGIN_NAME }}/Library
       # This will build your solution. If the solution name differs from your plugin name, please adjust it here
       - name: Build .NET Assemblies
         run: |
@@ -49,7 +49,8 @@ jobs:
         run: |
           Copy-Item "D:\a\NinaLumixPlugin\NinaLumixPlugin\bin\Release\net8.0-windows\Roberthasson.NINA.Lumixcamera.dll" "packages/${{ env.PLUGIN_NAME }}/${{ env.PLUGIN_NAME }}.dll" -Force
           Copy-Item "D:\a\NinaLumixPlugin\NinaLumixPlugin\bin\Release\net8.0-windows\Roberthasson.NINA.Lumixcamera.pdb" "packages/${{ env.PLUGIN_NAME }}/${{ env.PLUGIN_NAME }}.pdb" -Force
-      
+          Copy-Item "D:\a\NinaLumixPlugin\NinaLumixPlugin\bin\Release\net8.0-windows\Library\Lmxptpif.dll" "packages/${{ env.PLUGIN_NAME }}/Library/Lmxptpif.dll" -Force      
+
       - name: Create Plugin archives and manifests
         run: |
           curl https://api.bitbucket.org/2.0/repositories/isbeorn/nina.plugin.manifests/src/main/tools/CreateNET7Manifest.ps1 >> CreateNET7Manifest.ps1
