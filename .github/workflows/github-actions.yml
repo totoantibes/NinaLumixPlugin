@@ -12,7 +12,7 @@ on:
 
 env:
   # Adjust this to your plugin title
-  env.PLUGIN_NAME: "Roberthasson.NINA.Lumixcamera"
+  PLUGIN_NAME: "Roberthasson.NINA.Lumixcamera"
 
 jobs:
   build-and-release:
@@ -22,10 +22,10 @@ jobs:
         uses: actions/checkout@v2
 
       # In case you need more sub folders add these here
-      - name: Prepare folders
-        run: |
-          mkdir packages
-          mkdir packages/${{ env.PLUGIN_NAME }}
+#      - name: Prepare folders
+#        run: |
+#         mkdir packages
+#          mkdir packages/${{ env.PLUGIN_NAME }}
 
       # This will build your solution. If the solution name differs from your plugin name, please adjust it here
       - name: Build .NET Assemblies
