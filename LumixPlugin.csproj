@@ -44,6 +44,12 @@
   </ItemGroup>
   <ItemGroup>
     <None Update="Library\Lmxptpif.dll">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </None>
+    <None Update="Library\Lmxptpif.lib">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </None>
+    <None Update="LumixcameraDrivers\Lmxptpif.dll">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
     <None Update="Properties\Settings.Settings">
