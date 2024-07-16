@@ -49,7 +49,7 @@ jobs:
         run: |
           Copy-Item "D:\a\NinaLumixPlugin\NinaLumixPlugin\bin\Release\net8.0-windows\Roberthasson.NINA.Lumixcamera.dll" "packages/${{ env.PLUGIN_NAME }}/${{ env.PLUGIN_NAME }}.dll" -Force
           Copy-Item "D:\a\NinaLumixPlugin\NinaLumixPlugin\bin\Release\net8.0-windows\Roberthasson.NINA.Lumixcamera.pdb" "packages/${{ env.PLUGIN_NAME }}/${{ env.PLUGIN_NAME }}.pdb" -Force
-          Copy-Item "D:\a\NinaLumixPlugin\NinaLumixPlugin\bin\Release\net8.0-windows\Library\Lmxptpif.dll" "packages/${{ env.PLUGIN_NAME }}/Library/Lmxptpif.dll" -Force      
+          Copy-Item "D:\a\NinaLumixPlugin\NinaLumixPlugin\bin\Release\net8.0-windows\Library\Lmxptpif.dll" "packages/${{ env.PLUGIN_NAME }}/Lmxptpif.dll" -Force      
 
       - name: Create Plugin archives and manifests
         run: |
