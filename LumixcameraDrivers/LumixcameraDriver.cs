@@ -563,6 +563,12 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
         }
 
         public void AbortExposure() {
+            if (_downloadExposure != null && _downloadExposure.Task.Status <= TaskStatus.Running) {
+                Notification.ShowWarning("Exposure still in progress. Cancelling it.");
+                Logger.Warning("Exposure still in progress. Cancelling it.");
+                try { bulbCompletionCTS?.Cancel(); } catch { }
+                _downloadExposure.TrySetCanceled();
+            }
             StopExposure();
         }
 
@@ -728,13 +734,14 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
         public void Disconnect() {
             if (Connected) {
                 try {
-                    //returnV = LumixCam.LMX_func_api_Delete_CallBackInfo(callback);
-                    //returnV = LumixCam.LMX_func_api_Reg_NotifyCallback((uint)Lmx_event_id.LMX_DEF_LIB_EVENT_ID_OBJCT_REQ_TRNSFER, callback);
-                    //returnV = LumixCam.LMX_func_api_Reg_NotifyCallback((uint)Lmx_event_id.LMX_DEF_LIB_EVENT_ID_REC_CTRL_RELEASE, callback);
-                    //returnV = LumixCam.LMX_func_api_Reg_NotifyCallback((uint)Lmx_event_id.LMX_DEF_LIB_EVENT_ID_SHUTTER, callback);
-                    //returnV = LumixCam.LMX_func_api_Reg_NotifyCallback((uint)Lmx_event_id.LMX_DEF_LIB_EVENT_ID_ISO, callback);
+                    returnV = LumixCam.LMX_func_api_Delete_CallBackInfo((uint)Lmx_event_id.LMX_DEF_LIB_EVENT_ID_OBJCT_ADD);
+                    returnV = LumixCam.LMX_func_api_Delete_CallBackInfo((uint)Lmx_event_id.LMX_DEF_LIB_EVENT_ID_OBJCT_REQ_TRNSFER);
+                    returnV = LumixCam.LMX_func_api_Delete_CallBackInfo((uint)Lmx_event_id.LMX_DEF_LIB_EVENT_ID_REC_CTRL_RELEASE);
+                    returnV = LumixCam.LMX_func_api_Delete_CallBackInfo((uint)Lmx_event_id.LMX_DEF_LIB_EVENT_ID_SHUTTER);
+                    returnV = LumixCam.LMX_func_api_Delete_CallBackInfo((uint)Lmx_event_id.LMX_DEF_LIB_EVENT_ID_ISO);
 
                     ret = LumixCam.LMX_func_api_Close_Session(out retError);
+                    ret = LumixCam.LMX_func_api_Close_Device(out retError);//see if this make a difference
                 } catch (Exception ex) {
                     Logger.Error(ex);
                     _lmxConnectDeviceInfo.Equals(null);
