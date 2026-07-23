@@ -1559,11 +1559,11 @@ namespace LumixWrapper {
         [DllImport(DLLNAME, ExactSpelling = true, CallingConvention = cc)]
         public static extern byte LMX_func_api_Mov_Config_Set_Rec_mode_Param(uint ulParam, out uint retError);
 
-        [DllImport(DLLNAME, ExactSpelling = true, CallingConvention = cc)]
-        public static extern byte LMX_func_api_SetupFilesConfig_Get_Target(UInt16* punParam, out uint retError);
+        [DllImport(DLLNAME, EntryPoint = "LMX_func_api_SetupFilesConfig_Get_Target", ExactSpelling = true, CallingConvention = cc)]
+        private static extern byte Pub_SetupFilesConfig_Get_Target(out ushort punParam, out uint retError);
 
-        [DllImport(DLLNAME, ExactSpelling = true, CallingConvention = cc)]
-        public static extern byte LMX_func_api_SetupFilesConfig_Set_Target(UInt16 unParam, out uint retError);
+        [DllImport(DLLNAME, EntryPoint = "LMX_func_api_SetupFilesConfig_Set_Target", ExactSpelling = true, CallingConvention = cc)]
+        private static extern byte Pub_SetupFilesConfig_Set_Target(ushort unParam, out uint retError);
 
         ////////////////////////////////////////////////////////////////////
         //
@@ -1625,11 +1625,8 @@ namespace LumixWrapper {
             out uint retError
         );
 
-        [DllImport(DLLNAME, ExactSpelling = true, CallingConvention = cc)]
-        public static extern byte LMX_func_api_Skip_Object_Transfer(
-            uint ObjectHandle,
-            out uint retError
-        );
+        [DllImport(DLLNAME, EntryPoint = "LMX_func_api_Skip_Object_Transfer", ExactSpelling = true, CallingConvention = cc)]
+        private static extern byte Pub_Skip_Object_Transfer(uint ObjectHandle, out uint retError);
 
         ////////////////////////////////////////////////////////////////////
         //

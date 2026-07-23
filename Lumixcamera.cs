@@ -189,6 +189,18 @@ namespace Roberthasson.NINA.Lumixcamera {
             }
         }
 
+        // 0 = SD only (default), 1 = PC only (cardless), 2 = PC + SD. Extended (Tether) mode only.
+        public int SaveTarget {
+            get {
+                return Settings.Default.SaveTarget;
+            }
+            set {
+                Settings.Default.SaveTarget = value;
+                CoreUtil.SaveSettings(Settings.Default);
+                RaisePropertyChanged();
+            }
+        }
+
         public string ProfileSpecificNotificationMessage {
             get {
                 return pluginSettings.GetValueString(nameof(ProfileSpecificNotificationMessage), string.Empty);

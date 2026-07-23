@@ -29,6 +29,17 @@
                     <TextBlock.ToolTip>Extended mode only. Forces JPEG capture so the preview always displays. Reconnect after changing.</TextBlock.ToolTip>
                 </TextBlock>
             </StackPanel>
+            <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+                <TextBlock VerticalAlignment="Center">
+                    <TextBlock.Text>Save destination</TextBlock.Text>
+                    <TextBlock.ToolTip>Extended mode only. Where captured images are stored: SD card, directly to the PC (no card needed), or both. Reconnect after changing.</TextBlock.ToolTip>
+                </TextBlock>
+                <ComboBox MinWidth="140" Margin="6,0,0,0" SelectedIndex="{Binding SaveTarget}">
+                    <ComboBoxItem Content="SD card only" />
+                    <ComboBoxItem Content="PC only (cardless)" />
+                    <ComboBoxItem Content="PC + SD card" />
+                </ComboBox>
+            </StackPanel>
             <Separator Margin="0,0,0,8" />
             <!--<StackPanel Orientation="Horizontal">
                 <TextBlock Text="Default Notification Message" />

@@ -80,7 +80,15 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
                     break;
 
                 case Lmx_event_id.LMX_DEF_LIB_EVENT_ID_OBJCT_REQ_TRNSFER:
-                    //Notification.ShowInformation("LMX_DEF_LIB_EVENT_ID_OBJCT_REQ_TRNSFER");
+                    // Host/PC transfer request (save target PC-only or PC+SD). cb_event_param is the cardless
+                    // handle (0x12345678). A pending transfer MUST be consumed — pulled or skipped — or the
+                    // camera keeps a pending-write state and won't power off. If the frame isn't downloaded yet,
+                    // pull it to the PC; if it already completed via the card write (PC+SD), release it.
+                    if (_downloadExposure != null && !_downloadExposure.Task.IsCompleted) {
+                        ExposureFinished(cb_event_param);
+                    } else {
+                        LMX_func_api_Skip_Object_Transfer(cb_event_param, out uint _skipErr);
+                    }
                     break;
 
                 case Lmx_event_id.LMX_DEF_LIB_EVENT_ID_SHUTTER:
@@ -108,6 +116,9 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
         private Dictionary<string, CameraSpecs> lumixCameras;
 
         private void ExposureFinished(uint cb_event_param) {
+            // With PC+SD, one frame fires both OBJCT_REQ_TRNSFER (cardless handle) and OBJCT_ADD (card handle);
+            // process only the first so we don't download twice.
+            if (_downloadExposure == null || _downloadExposure.Task.IsCompleted) { return; }
             uint formatType;
             uint dataSize;
             LMX_STRUCT_PTP_ARRAY_STRING fileNameArrStr = new LMX_STRUCT_PTP_ARRAY_STRING();
@@ -790,6 +801,14 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
                     returnV = LumixCam.LMX_func_api_Reg_NotifyCallback((uint)Lmx_event_id.LMX_DEF_LIB_EVENT_ID_SHUTTER, callback);
                     returnV = LumixCam.LMX_func_api_Reg_NotifyCallback((uint)Lmx_event_id.LMX_DEF_LIB_EVENT_ID_ISO, callback);
 
+                    // Save destination (extended mode only): SD only / PC only (cardless) / PC+SD. With a PC
+                    // target the camera fires OBJCT_REQ_TRNSFER on capture and we pull the frame via Get_Object.
+                    if (NativeBinding.ExtendedMode) {
+                        ushort saveTgt = (ushort)Properties.Settings.Default.SaveTarget;
+                        LumixCam.LMX_func_api_SetupFilesConfig_Set_Target(saveTgt, out retError);
+                        Logger.Info($"Save target set to {saveTgt} (0=SD,1=PC,2=PC+SD), err={retError}.");
+                    }
+
                     lumixCameras = new Dictionary<string, CameraSpecs>
                          {
             { "DC-S1R", new CameraSpecs { Model = "DC-S1R", Width = 8368, Height = 5584, PixelPitch = 4.3 } },
@@ -856,6 +875,10 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
                     returnV = LumixCam.LMX_func_api_Delete_CallBackInfo((uint)Lmx_event_id.LMX_DEF_LIB_EVENT_ID_ISO);
 
                     if (NativeBinding.ExtendedMode) {
+                        // Restore SD-only so we never leave the camera in cardless mode for other apps.
+                        if (Properties.Settings.Default.SaveTarget != LumixCam.SAVE_TARGET_SD) {
+                            LumixCam.LMX_func_api_SetupFilesConfig_Set_Target(LumixCam.SAVE_TARGET_SD, out retError);
+                        }
                         LumixCam.Ext_Disconnect(out retError);
                     } else {
                         ret = LumixCam.LMX_func_api_Close_Session(out retError);

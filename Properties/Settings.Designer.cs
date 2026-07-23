@@ -94,6 +94,18 @@ namespace Roberthasson.NINA.Lumixcamera.Properties {
                 this["PreferJpeg"] = value;
             }
         }
+
+        [global::System.Configuration.UserScopedSettingAttribute()]
+        [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
+        [global::System.Configuration.DefaultSettingValueAttribute("0")]
+        public int SaveTarget {
+            get {
+                return ((int)(this["SaveTarget"]));
+            }
+            set {
+                this["SaveTarget"] = value;
+            }
+        }
         
         [global::System.Configuration.UserScopedSettingAttribute()]
         [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]

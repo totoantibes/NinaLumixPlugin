@@ -88,6 +88,8 @@ namespace LumixWrapper {
         private static extern byte Ext_Get_Object_DataSize(uint objHandle, out uint pDataSize, IntPtr ctx, out uint retError);
         [DllImport(DLLNAME, EntryPoint = "LMX_func_api_Get_Object_FileName", ExactSpelling = true, CallingConvention = cc)]
         private static extern byte Ext_Get_Object_FileName(uint objHandle, ref LMX_STRUCT_PTP_ARRAY_STRING pFileName, IntPtr ctx, out uint retError);
+        [DllImport(DLLNAME, EntryPoint = "LMX_func_api_Skip_Object_Transfer", ExactSpelling = true, CallingConvention = cc)]
+        private static extern byte Ext_Skip_Object_Transfer(uint objHandle, IntPtr ctx, out uint retError);
 
         [DllImport(DLLNAME, EntryPoint = "LMX_func_api_Ctrl_LiveView_Start", ExactSpelling = true, CallingConvention = cc)]
         private static extern byte Ext_Ctrl_LiveView_Start(IntPtr ctx, out uint retError);
@@ -119,6 +121,8 @@ namespace LumixWrapper {
             NativeBinding.ExtendedMode ? Ext_Get_Object_DataSize(objHandle, out pDataSize, _tetherCtx, out retError) : Pub_Get_Object_DataSize(objHandle, out pDataSize, out retError);
         public static byte LMX_func_api_Get_Object_FileName(uint objHandle, ref LMX_STRUCT_PTP_ARRAY_STRING pFileName, out uint retError) =>
             NativeBinding.ExtendedMode ? Ext_Get_Object_FileName(objHandle, ref pFileName, _tetherCtx, out retError) : Pub_Get_Object_FileName(objHandle, ref pFileName, out retError);
+        public static byte LMX_func_api_Skip_Object_Transfer(uint objHandle, out uint retError) =>
+            NativeBinding.ExtendedMode ? Ext_Skip_Object_Transfer(objHandle, _tetherCtx, out retError) : Pub_Skip_Object_Transfer(objHandle, out retError);
         public static byte LMX_func_api_Ctrl_LiveView_Start(out uint retError) =>
             NativeBinding.ExtendedMode ? Ext_Ctrl_LiveView_Start(_tetherCtx, out retError) : Pub_Ctrl_LiveView_Start(out retError);
         public static byte LMX_func_api_Ctrl_LiveView_Stop(out uint retError) =>
@@ -180,6 +184,22 @@ namespace LumixWrapper {
             Ext_ImageInfo_GetImageQuality(out quality, _tetherCtx, out retError);
         public static byte Ext_GetBattery(out uint info, out uint retError) =>
             Ext_GetBatteryInfo(out info, _tetherCtx, out retError);
+
+        // ===================== Save destination (SetupFilesConfig target) =====================
+        // 0=SD only (default), 1=PC only (cardless), 2=PC+SD. On capture with a PC target the camera fires
+        // OBJCT_REQ_TRNSFER with the cardless handle; Get_Object(CARDLESS_TRNSFER_HDL) pulls the frame to the PC.
+        public const ushort SAVE_TARGET_SD = 0, SAVE_TARGET_PC = 1, SAVE_TARGET_PC_AND_SD = 2;
+        public const uint CARDLESS_TRNSFER_HDL = 0x12345678;   // LMX_DEF_OBJ_CARDLESS_TRNSFER_HDL
+
+        [DllImport(DLLNAME, EntryPoint = "LMX_func_api_SetupFilesConfig_Get_Target", ExactSpelling = true, CallingConvention = cc)]
+        private static extern byte Ext_SetupFilesConfig_GetTarget(out ushort punParam, IntPtr ctx, out uint retError);
+        [DllImport(DLLNAME, EntryPoint = "LMX_func_api_SetupFilesConfig_Set_Target", ExactSpelling = true, CallingConvention = cc)]
+        private static extern byte Ext_SetupFilesConfig_SetTarget(ushort unParam, IntPtr ctx, out uint retError);
+
+        public static byte LMX_func_api_SetupFilesConfig_Get_Target(out ushort punParam, out uint retError) =>
+            NativeBinding.ExtendedMode ? Ext_SetupFilesConfig_GetTarget(out punParam, _tetherCtx, out retError) : Pub_SetupFilesConfig_Get_Target(out punParam, out retError);
+        public static byte LMX_func_api_SetupFilesConfig_Set_Target(ushort unParam, out uint retError) =>
+            NativeBinding.ExtendedMode ? Ext_SetupFilesConfig_SetTarget(unParam, _tetherCtx, out retError) : Pub_SetupFilesConfig_Set_Target(unParam, out retError);
 
         // ===================== Extended connection (raw buffers + held context) =====================
         /// <summary>Enumerate cameras via the extended DLL. Returns model names (index-aligned).</summary>
