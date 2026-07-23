@@ -172,15 +172,22 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
         // BULB / AUTO / UNKNOWN are excluded.
         private void BuildSsTable() {
             _ssTable = new List<(double, int)>();
+            if (_exposures == null) { _exposures = new List<int>(); }
             var support = SS_CapaInfo.Capa_Enum.SupportVal;
             if (support == null) { return; }
-            foreach (uint v in support) {
+            // Iterate only the valid entries (NumOfVal), not the full fixed-size array — the tail is garbage.
+            int count = SS_CapaInfo.Capa_Enum.NumOfVal;
+            if (count <= 0 || count > support.Length) { count = support.Length; }
+            for (int i = 0; i < count; i++) {
+                uint v = (uint)support[i];
                 if (v == 0) { continue; }
                 if (v == 0xFFFFFFFF) { continue; }                                                                  // BULB
                 if (v == (uint)Lmx_def_lib_DevpropEx_ShutterSpeed_param.LMX_DEF_PTP_DEVPROP_EXT_LMX_SS_UNKNOWN) { continue; }
                 if (v == (uint)Lmx_def_lib_DevpropEx_ShutterSpeed_param.LMX_DEF_PTP_DEVPROP_EXT_LMX_SS_AUTO) { continue; }
                 double sec = ((v & 0x80000000) != 0) ? (double)(v & 0x7fffffff) / 1000.0 : 1000.0 / v;
-                if (sec > 0) { _ssTable.Add((sec, unchecked((int)v))); }
+                if (sec <= 0) { continue; }
+                _ssTable.Add((sec, unchecked((int)v)));
+                if ((v & 0x80000000) != 0) { _exposures.Add((int)(v & 0x7fffffff) / 1000); }   // whole-second fallback list
             }
         }
 
@@ -253,38 +260,26 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
 
         private IList<int> _exposures;
 
+        // Exposure bounds are derived from the supported-shutter LIST (reliable in both DLLs), not from
+        // CurVal_Range — the Tether capability buffer's range fields sit at a different offset than the public
+        // struct, so reading them via PtrToStructure yielded a bogus ExposureMin that clamped NINA (e.g. the
+        // Flat Wizard) to 1s and never let sub-second exposures through.
         public double ExposureMin {
             get {
-                double _exp = 120;
-                if (Connected) {
-                    if (_exposures.IsEqual(null)) {
-                        _exposures = new List<int>();
-                        foreach (uint val in SS_CapaInfo.Capa_Enum.SupportVal) {
-                            //if (val != 0 && !val.IsEqual(Lmx_def_lib_DevpropEx_ShutterSpeed_param.LMX_DEF_PTP_DEVPROP_EXT_LMX_SS_UNKNOWN) && !val.IsEqual(Lmx_def_lib_DevpropEx_ShutterSpeed_param.LMX_DEF_PTP_DEVPROP_EXT_LMX_SS_BULB) && !val.IsEqual(Lmx_def_lib_DevpropEx_ShutterSpeed_param.LMX_DEF_PTP_DEVPROP_EXT_LMX_SS_AUTO)) {
-                            if ((val & 0x80000000) != 0x00000000) {
-                                _exposures.Add((int)(val & 0x7fffffff) / 1000);
-                                //_exp = Math.Max(val, _exp);
-                            }
-                        }
-                    }
-                    _exp = SS_CapaInfo.CurVal_Range.MaxVal;
-                    return ((double)(1 / (_exp / 1000)));
-                } else { return 0; }
+                if (!Connected) { return 0; }
+                if (_ssTable == null || _ssTable.Count == 0) { BuildSsTable(); }
+                double min = (_ssTable != null && _ssTable.Count > 0) ? _ssTable.Min(e => e.seconds) : 0;
+                Logger.Debug($"[LumixSS] ExposureMin={min:0.######}s (from {(_ssTable?.Count ?? 0)} speeds)");
+                return min;
             }
         }
 
         public double ExposureMax {
             get {
-                if (Connected) {
-                    // TO DO in case BULB is supported
-
-                    //if (SS_CapaInfo.Capa_Enum.SupportVal[0] == (int)((Lmx_def_lib_DevpropEx_ShutterSpeed_param.LMX_DEF_PTP_DEVPROP_EXT_LMX_SS_BULB))) {
-                    //    bulbFound = true;
-                    //    return double.PositiveInfinity;
-                    //} else {
-                    return ((double)(SS_CapaInfo.CurVal_Range.MinVal & 0x7fffffff) / 1000);
-                    //}
-                } else { return 0; }
+                if (!Connected) { return 0; }
+                if (_ssTable == null || _ssTable.Count == 0) { BuildSsTable(); }
+                // Slowest non-bulb speed (BULB is excluded from the table). Bulb >60s is still unsupported.
+                return (_ssTable != null && _ssTable.Count > 0) ? _ssTable.Max(e => e.seconds) : 60;
             }
         }
 
@@ -596,11 +591,14 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
                 // reusing the previous value, which broke exposure-time search. Works on both the public and
                 // Tether DLLs (both expose the supported-speed list and the setter). [needs on-camera verify]
                 int rawSs = NearestSsRaw(exposureTime, out double actualSec);
+                Logger.Info($"[LumixSS] req={exposureTime:0.#####}s ssTable={(_ssTable?.Count ?? -1)} nearest={actualSec:0.#####}s raw=0x{(uint)rawSs:X8}");
                 if (rawSs != 0) {
                     if (Math.Abs(actualSec - exposureTime) > 1e-6) {
                         Logger.Info($"Requested {exposureTime:0.####}s is not a supported shutter speed; using nearest {actualSec:0.####}s.");
                     }
-                    LMX_func_api_SS_Set_Param(rawSs, out uint retError);
+                    byte setR = LMX_func_api_SS_Set_Param(rawSs, out uint setErr);
+                    LMX_func_api_SS_Get_Param(out int rbVal, out uint rbErr);
+                    Logger.Info($"[LumixSS] set raw=0x{(uint)rawSs:X8} ret={setR} err={setErr}; readback=0x{(uint)rbVal:X8}");
                 } else if (exposureTime >= 1 && _exposures.Contains((int)exposureTime)) {
                     // Fallback (capability table empty): original exact-match path.
                     LMX_func_api_SS_Set_Param((((int)(exposureTime) * 1000) | 0x80000000), out uint retError);
