@@ -128,17 +128,32 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
 
         // ---- Extended-mode helpers: manual-mode whitelist + shutter-speed snapping ----
 
-        private ushort _lastBadModePos = 0xFFFF;
+        private ushort _lastNotifiedModePos = 0xFFFF;
         private List<(double seconds, int raw)> _ssTable;
 
-        // M and the C1-C3 custom presets (typically programmed as an M variant) are all valid for astro
-        // captures. The Tether SDK reports the C-mode positions; the public SDK generally cannot, which is
-        // why on the public SDK a C1 preset is unrecognised and the user has to switch the dial to M.
-        private static bool IsManualLikeMode(ushort modePos) {
-            return modePos == (ushort)Lmx_def_lib_Camera_Mode_Info_Mode_Pos.LMX_DEF_CAMERA_MODE_INFO_MODE_POS_M
-                || modePos == (ushort)Lmx_def_lib_Camera_Mode_Info_Mode_Pos.LMX_DEF_CAMERA_MODE_INFO_MODE_POS_CUSTOM
-                || modePos == (ushort)Lmx_def_lib_Camera_Mode_Info_Mode_Pos.LMX_DEF_CAMERA_MODE_INFO_MODE_POS_CUSTOM2
-                || modePos == (ushort)Lmx_def_lib_Camera_Mode_Info_Mode_Pos.LMX_DEF_CAMERA_MODE_INFO_MODE_POS_CUSTOM3;
+        private static bool IsManualMode(ushort modePos) =>
+            modePos == (ushort)Lmx_def_lib_Camera_Mode_Info_Mode_Pos.LMX_DEF_CAMERA_MODE_INFO_MODE_POS_M;
+
+        // C1-C3 custom presets. The Tether SDK reports these dial positions but NOT the base program (M/P/A/S)
+        // the preset encodes, so we can't be sure a custom set is Manual. We give the user the benefit of the
+        // doubt: assume it is M-based, proceed, and only warn.
+        private static bool IsCustomMode(ushort modePos) =>
+            modePos == (ushort)Lmx_def_lib_Camera_Mode_Info_Mode_Pos.LMX_DEF_CAMERA_MODE_INFO_MODE_POS_CUSTOM
+            || modePos == (ushort)Lmx_def_lib_Camera_Mode_Info_Mode_Pos.LMX_DEF_CAMERA_MODE_INFO_MODE_POS_CUSTOM2
+            || modePos == (ushort)Lmx_def_lib_Camera_Mode_Info_Mode_Pos.LMX_DEF_CAMERA_MODE_INFO_MODE_POS_CUSTOM3;
+
+        // Warn (never block) about the current exposure mode. M is silent; a C1-C3 custom preset gets a soft
+        // "assumed M-based" warning; anything else gets the stronger warning. Change-detected so repeated
+        // captures in the same mode don't spam the same notification.
+        private void CheckExposureMode(ushort modePos) {
+            if (IsManualMode(modePos)) { _lastNotifiedModePos = modePos; return; }
+            if (modePos == _lastNotifiedModePos) { return; }
+            _lastNotifiedModePos = modePos;
+            if (IsCustomMode(modePos)) {
+                Notification.ShowWarning("Camera is in a custom mode (C1-C3), assumed to be an M-based preset. Proceeding - set the preset to Manual if exposures look wrong.");
+            } else {
+                Notification.ShowWarning("Camera is not in M or a custom (C1-C3) preset - exposures may be incorrect.");
+            }
         }
 
         // Decode the camera's supported shutter-speed list into (seconds, raw) once. Whole-second speeds
@@ -552,15 +567,7 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
                 // spam. Runs on both DLLs; the Tether DLL additionally recognises the C1-C3 custom presets.
                 LMX_STRUCT_RECINFO_CAMERA_MODE_CAPA_INFO cmNow = new LMX_STRUCT_RECINFO_CAMERA_MODE_CAPA_INFO();
                 if (LMX_func_api_CameraMode_Get_Capability(ref cmNow, out uint cmErr) == LMX_BOOL_TRUE) {
-                    ushort pos = cmNow.CurVal_mode_pos;
-                    if (!IsManualLikeMode(pos)) {
-                        if (pos != _lastBadModePos) {
-                            Notification.ShowWarning("Camera is not in M or a C1-C3 custom (M-based) mode - exposures may be incorrect.");
-                            _lastBadModePos = pos;
-                        }
-                    } else {
-                        _lastBadModePos = 0xFFFF;
-                    }
+                    CheckExposureMode(cmNow.CurVal_mode_pos);
                 }
 
                 Logger.Debug("Prepare start of exposure: " + sequence);
@@ -763,12 +770,10 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
                     if (!CM_CapaInfo.CurVal_mode_drive.IsEqual(Lmx_def_lib_Camera_Mode_Info_Drive_Mode.LMX_DEF_CAMERA_MODE_INFO_DRIVE_MODE_SINGLE)) {
                         Notification.ShowWarning("Camera is not in Single Shot Mode. Best to change");
                     }
-                    // Warn unless the dial is in a manual-capable mode (M or a C1-C3 custom preset). Runs on
-                    // both DLLs; only the Tether DLL actually reports C-mode positions, so on the public DLL a
-                    // C1-C3 preset still reads as non-manual and warns (the public SDK cannot drive C-modes).
-                    if (!IsManualLikeMode(CM_CapaInfo.CurVal_mode_pos)) {
-                        Notification.ShowWarning("Camera is not in M or a C1-C3 custom (M-based) mode. Set the dial to M or a manual custom preset for astro captures.");
-                    }
+                    // Warn (never block) about the exposure mode. Runs on both DLLs; only the Tether DLL reports
+                    // C-mode positions, so on the public DLL a C1-C3 preset reads as non-manual and gets the
+                    // stronger warning (the public SDK cannot drive C-modes anyway).
+                    CheckExposureMode(CM_CapaInfo.CurVal_mode_pos);
 
                     // Get current parameter values
                     ret = LumixCam.LMX_func_api_ISO_Get_Param(out _curIsoValue, out retError);
