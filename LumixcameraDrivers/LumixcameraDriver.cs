@@ -126,6 +126,53 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
             return;
         }
 
+        // ---- Extended-mode helpers: manual-mode whitelist + shutter-speed snapping ----
+
+        private ushort _lastBadModePos = 0xFFFF;
+        private List<(double seconds, int raw)> _ssTable;
+
+        // M and the C1-C3 custom presets (typically programmed as an M variant) are all valid for astro
+        // captures. The Tether SDK reports the C-mode positions; the public SDK generally cannot, which is
+        // why on the public SDK a C1 preset is unrecognised and the user has to switch the dial to M.
+        private static bool IsManualLikeMode(ushort modePos) {
+            return modePos == (ushort)Lmx_def_lib_Camera_Mode_Info_Mode_Pos.LMX_DEF_CAMERA_MODE_INFO_MODE_POS_M
+                || modePos == (ushort)Lmx_def_lib_Camera_Mode_Info_Mode_Pos.LMX_DEF_CAMERA_MODE_INFO_MODE_POS_CUSTOM
+                || modePos == (ushort)Lmx_def_lib_Camera_Mode_Info_Mode_Pos.LMX_DEF_CAMERA_MODE_INFO_MODE_POS_CUSTOM2
+                || modePos == (ushort)Lmx_def_lib_Camera_Mode_Info_Mode_Pos.LMX_DEF_CAMERA_MODE_INFO_MODE_POS_CUSTOM3;
+        }
+
+        // Decode the camera's supported shutter-speed list into (seconds, raw) once. Whole-second speeds
+        // carry 0x80000000 (seconds = (v & 0x7fffffff)/1000); fractional speeds are 1/x (seconds = 1000/v).
+        // BULB / AUTO / UNKNOWN are excluded.
+        private void BuildSsTable() {
+            _ssTable = new List<(double, int)>();
+            var support = SS_CapaInfo.Capa_Enum.SupportVal;
+            if (support == null) { return; }
+            foreach (uint v in support) {
+                if (v == 0) { continue; }
+                if (v == 0xFFFFFFFF) { continue; }                                                                  // BULB
+                if (v == (uint)Lmx_def_lib_DevpropEx_ShutterSpeed_param.LMX_DEF_PTP_DEVPROP_EXT_LMX_SS_UNKNOWN) { continue; }
+                if (v == (uint)Lmx_def_lib_DevpropEx_ShutterSpeed_param.LMX_DEF_PTP_DEVPROP_EXT_LMX_SS_AUTO) { continue; }
+                double sec = ((v & 0x80000000) != 0) ? (double)(v & 0x7fffffff) / 1000.0 : 1000.0 / v;
+                if (sec > 0) { _ssTable.Add((sec, unchecked((int)v))); }
+            }
+        }
+
+        // Nearest supported shutter speed (raw value) to the requested seconds; 0 if the list is unknown.
+        private int NearestSsRaw(double requestedSeconds, out double actualSeconds) {
+            if (_ssTable == null || _ssTable.Count == 0) { BuildSsTable(); }
+            actualSeconds = requestedSeconds;
+            if (_ssTable == null || _ssTable.Count == 0) { return 0; }
+            var best = _ssTable[0];
+            double bestErr = Math.Abs(best.seconds - requestedSeconds);
+            foreach (var e in _ssTable) {
+                double err = Math.Abs(e.seconds - requestedSeconds);
+                if (err < bestErr) { bestErr = err; best = e; }
+            }
+            actualSeconds = best.seconds;
+            return best.raw;
+        }
+
         public bool HasShutter => true;
 
         public double Temperature {
@@ -500,44 +547,49 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
                 lmx_rec_ctrl.ParamData.NumOfVal = 0;
                 double exposureTime = sequence.ExposureTime;
 
+                // Re-check the exposure mode every capture so a mid-session dial change out of a manual mode is
+                // caught (the SDK exposes no mode-change push event, so we poll). Warn once per change to avoid
+                // spam. Runs on both DLLs; the Tether DLL additionally recognises the C1-C3 custom presets.
+                LMX_STRUCT_RECINFO_CAMERA_MODE_CAPA_INFO cmNow = new LMX_STRUCT_RECINFO_CAMERA_MODE_CAPA_INFO();
+                if (LMX_func_api_CameraMode_Get_Capability(ref cmNow, out uint cmErr) == LMX_BOOL_TRUE) {
+                    ushort pos = cmNow.CurVal_mode_pos;
+                    if (!IsManualLikeMode(pos)) {
+                        if (pos != _lastBadModePos) {
+                            Notification.ShowWarning("Camera is not in M or a C1-C3 custom (M-based) mode - exposures may be incorrect.");
+                            _lastBadModePos = pos;
+                        }
+                    } else {
+                        _lastBadModePos = 0xFFFF;
+                    }
+                }
+
                 Logger.Debug("Prepare start of exposure: " + sequence);
                 _downloadExposure = new TaskCompletionSource<object>();
                 if (_exposures == null) { _ = ExposureMin; }   // lazily build the discrete exposure list (was NRE on 1st shot)
-                if (exposureTime <= 60.0 && exposureTime >= 1) {
-                    if (_exposures.Contains((int)exposureTime)) {
-                        Logger.Debug(" 1 <= Exposuretime <= 60. Setting automatic shutter speed.");
-                        LMX_func_api_SS_Set_Param((((int)(exposureTime) * 1000) | 0x80000000), out uint retError);
-                    } else {
-                        Notification.ShowWarning("Exposure is not in the allowed list of exposures. Will take a 1 sec exposure or the last good setting");
+
+                if (exposureTime > 60.0) {
+                    // >60s needs Bulb start/stop, which is not yet supported (open RE item; see README).
+                    Notification.ShowWarning("Exposures over 60s need Bulb mode, which is not yet supported. Maximum is 60s.");
+                    return;
+                }
+
+                // The camera accepts only discrete shutter speeds. NINA (e.g. the Flat Wizard's dichotomy) asks
+                // for arbitrary times; snap to the nearest supported speed rather than failing and silently
+                // reusing the previous value, which broke exposure-time search. Works on both the public and
+                // Tether DLLs (both expose the supported-speed list and the setter). [needs on-camera verify]
+                int rawSs = NearestSsRaw(exposureTime, out double actualSec);
+                if (rawSs != 0) {
+                    if (Math.Abs(actualSec - exposureTime) > 1e-6) {
+                        Logger.Info($"Requested {exposureTime:0.####}s is not a supported shutter speed; using nearest {actualSec:0.####}s.");
                     }
+                    LMX_func_api_SS_Set_Param(rawSs, out uint retError);
+                } else if (exposureTime >= 1 && _exposures.Contains((int)exposureTime)) {
+                    // Fallback (capability table empty): original exact-match path.
+                    LMX_func_api_SS_Set_Param((((int)(exposureTime) * 1000) | 0x80000000), out uint retError);
+                } else if (exposureTime < 1) {
+                    LMX_func_api_SS_Set_Param((int)(1000 / exposureTime), out uint retError);
                 } else {
-                    if (exposureTime < 1) {
-                        Logger.Debug(" Exposuretime < 1. Setting automatic shutter speed.");
-                        LMX_func_api_SS_Set_Param((int)(1000 / exposureTime), out uint retError);
-                    } else {
-                        Notification.ShowWarning("Bulb Mode is not supported by the SDK. Max exposure time in 60s");
-                        ///*Stop Exposure after exposure time or upon cancellation*/
-                        //try { bulbCompletionCTS?.Cancel(); } catch { }
-                        //bulbCompletionCTS = new CancellationTokenSource();
-                        //Logger.Debug("Use Bulb capture");
-                        //LMX_func_api_SS_Set_Param((int)(Lmx_def_lib_DevpropEx_ShutterSpeed_param.LMX_DEF_PTP_DEVPROP_EXT_LMX_SS_BULB), out uint retError);
-
-                        //try {
-                        //    Logger.Debug("Starting bulb capture");
-                        //    Task.Run(() => LMX_func_api_Rec_Ctrl_Release(ref lmx_rec_ctrl, out retError));
-                        //} catch (Exception ex) {
-                        //    Logger.Error(ex);
-                        //}
-                        ///*Stop Exposure after exposure time */
-                        //bulbCompletionTask = Task.Run(async () => {
-                        //    await CoreUtil.Wait(TimeSpan.FromSeconds(exposureTime), bulbCompletionCTS.Token);
-                        //    if (!bulbCompletionCTS.IsCancellationRequested) {
-                        //        StopExposure();
-                        //    }
-                        //}, bulbCompletionCTS.Token);
-
-                        return;
-                    }
+                    Notification.ShowWarning("Exposure could not be matched to a supported shutter speed; using the last good setting.");
                 }
                 // for non bulb
                 Logger.Debug("Start capture");
@@ -711,8 +763,11 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
                     if (!CM_CapaInfo.CurVal_mode_drive.IsEqual(Lmx_def_lib_Camera_Mode_Info_Drive_Mode.LMX_DEF_CAMERA_MODE_INFO_DRIVE_MODE_SINGLE)) {
                         Notification.ShowWarning("Camera is not in Single Shot Mode. Best to change");
                     }
-                    if (CM_CapaInfo.CurVal_mode_pos.IsEqual(Lmx_def_lib_Camera_Mode_Info_Mode_Pos.LMX_DEF_CAMERA_MODE_INFO_MODE_POS_A) || CM_CapaInfo.CurVal_mode_pos.IsEqual(Lmx_def_lib_Camera_Mode_Info_Mode_Pos.LMX_DEF_CAMERA_MODE_INFO_MODE_POS_P) || CM_CapaInfo.CurVal_mode_pos.IsEqual(Lmx_def_lib_Camera_Mode_Info_Mode_Pos.LMX_DEF_CAMERA_MODE_INFO_MODE_POS_S)) {
-                        Notification.ShowWarning("Camera is not in M mode. Best To Change");
+                    // Warn unless the dial is in a manual-capable mode (M or a C1-C3 custom preset). Runs on
+                    // both DLLs; only the Tether DLL actually reports C-mode positions, so on the public DLL a
+                    // C1-C3 preset still reads as non-manual and warns (the public SDK cannot drive C-modes).
+                    if (!IsManualLikeMode(CM_CapaInfo.CurVal_mode_pos)) {
+                        Notification.ShowWarning("Camera is not in M or a C1-C3 custom (M-based) mode. Set the dial to M or a manual custom preset for astro captures.");
                     }
 
                     // Get current parameter values
