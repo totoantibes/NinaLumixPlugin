@@ -47,7 +47,9 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
         private uint _curIsoValue = 0;
         private int _curSsValue = 0;
         private bool bulbFound = false;
+        private bool _connected = false;
         private byte[] buffer;
+        private uint _lastFormat;   // object format of the most recent capture (RAW vs JPEG) for download decode
         private AsyncObservableCollection<BinningMode> _binningModes;
 
         private TaskCompletionSource<bool> _cameraConnected;
@@ -114,10 +116,9 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
             LMX_func_api_Get_Object_FormatType(cb_event_param, out formatType, out retError);
             LMX_func_api_Get_Object_DataSize(cb_event_param, out dataSize, out retError);
             LMX_func_api_Get_Object_FileName(cb_event_param, ref fileNameArrStr, out retError);
+            _lastFormat = formatType;
             buffer = new byte[dataSize];
-            if (!formatType.IsEqual(Lmx_def_lib_object_format.LMX_DEF_OBJ_FORMAT_RAW)) {
-                Notification.ShowWarning("The Image format is not set to RAW");
-            }
+            Logger.Debug($"Object added: format=0x{formatType:X} size={dataSize}");
 
             try { LMX_func_api_Get_Object(cb_event_param, ref buffer[0], dataSize, out retError); } catch (Exception ex) { }
 
@@ -439,7 +440,7 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
 
         public bool Connected {
             get {
-                return !_lmxConnectDeviceInfo.IsEqual(null);
+                return _connected;
             }
         }
 
@@ -501,6 +502,7 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
 
                 Logger.Debug("Prepare start of exposure: " + sequence);
                 _downloadExposure = new TaskCompletionSource<object>();
+                if (_exposures == null) { _ = ExposureMin; }   // lazily build the discrete exposure list (was NRE on 1st shot)
                 if (exposureTime <= 60.0 && exposureTime >= 1) {
                     if (_exposures.Contains((int)exposureTime)) {
                         Logger.Debug(" 1 <= Exposuretime <= 60. Setting automatic shutter speed.");
@@ -540,8 +542,11 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
                 // for non bulb
                 Logger.Debug("Start capture");
                 ret = LMX_func_api_Rec_Ctrl_Release(ref lmx_rec_ctrl, out retError);
-                if (retError == LMX_BOOL_TRUE) {
-                    Notification.ShowWarning("Can't execute Single-shot command");
+                Logger.Debug($"Rec_Ctrl_Release ret={ret} retError={retError}");
+                if (ret != LMX_BOOL_TRUE) {
+                    // Only a genuine failure (function returned not-TRUE). The old code warned whenever
+                    // retError==1, which is an error CODE not a bool — that fired a false error on the first shot.
+                    Logger.Warning($"Single-shot release did not succeed (ret={ret}, err={retError}).");
                 }
             }
         }
@@ -584,12 +589,20 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
             Logger.Debug("Downloading of exposure complete. Converting image to internal array");
 
             try {
-                var rawImageData = buffer;
                 var metaData = new ImageMetaData();
                 metaData.FromCamera(this);
+
+                // JPEG path: the camera captured a JPEG (or the user forced it) — decode it directly so NINA
+                // can display it even when its RAW converter can't decode this body's .RW2 (e.g. GH7, issue #1).
+                bool isJpeg = _lastFormat.IsEqual(Lmx_def_lib_object_format.LMX_DEF_OBJ_FORMAT_JPEG);
+                if (isJpeg) {
+                    Logger.Debug("Captured object is JPEG — decoding to image array for display.");
+                    return DecodeJpegToExposure(buffer, metaData);
+                }
+
                 return _exposureDataFactory.CreateRAWExposureData(
                     converter: _profileService.ActiveProfile.CameraSettings.RawConverter,
-                    rawBytes: rawImageData,
+                    rawBytes: buffer,
                     rawType: "rw2",
                     bitDepth: this.BitDepth,
                     metaData: metaData);
@@ -597,6 +610,29 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
                 if (buffer != null) {
                     buffer = null;
                 }
+            }
+        }
+
+        /// <summary>Decode a JPEG buffer to a 16-bit greyscale image array exposure (same path as live view).
+        /// Used as the display fallback when NINA's RAW converter can't handle a camera's .RW2.</summary>
+        private IExposureData DecodeJpegToExposure(byte[] jpeg, ImageMetaData metaData) {
+            using (var memStream = new MemoryStream(jpeg)) {
+                memStream.Position = 0;
+                var decoder = new JpegBitmapDecoder(memStream, BitmapCreateOptions.IgnoreColorProfile, BitmapCacheOption.OnLoad);
+                var bitmap = new FormatConvertedBitmap();
+                bitmap.BeginInit();
+                bitmap.Source = decoder.Frames[0];
+                bitmap.DestinationFormat = System.Windows.Media.PixelFormats.Gray16;
+                bitmap.EndInit();
+                ushort[] outArray = new ushort[bitmap.PixelWidth * bitmap.PixelHeight];
+                bitmap.CopyPixels(outArray, 2 * bitmap.PixelWidth, 0);
+                return _exposureDataFactory.CreateImageArrayExposureData(
+                    input: outArray,
+                    width: bitmap.PixelWidth,
+                    height: bitmap.PixelHeight,
+                    bitDepth: 16,
+                    isBayered: false,
+                    metaData: metaData);
             }
         }
 
@@ -653,8 +689,20 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
             return Task.Run<bool>(() => {
                 try {
                     //connect to device
-                    ret = LumixCam.LMX_func_api_Select_PnPDevice(_index, ref _lmxConnectDeviceInfo, out retError);
-                    ret = LumixCam.LMX_func_api_Open_Session(0x00010001, out deviceConnectVer, out retError);
+                    if (NativeBinding.ExtendedMode) {
+                        _connected = LumixCam.Ext_Connect(_index, out retError);
+                    } else {
+                        ret = LumixCam.LMX_func_api_Select_PnPDevice(_index, ref _lmxConnectDeviceInfo, out retError);
+                        ret = LumixCam.LMX_func_api_Open_Session(0x00010001, out deviceConnectVer, out retError);
+                        _connected = true;
+                    }
+
+                    // Extended: optionally force JPEG capture so NINA always gets a decodable image
+                    // (workaround for bodies whose .RW2 the RAW converter can't read, e.g. GH7 — issue #1).
+                    if (NativeBinding.ExtendedMode && Properties.Settings.Default.PreferJpeg) {
+                        LumixCam.Ext_SetImageQuality(LumixCam.IMGQ_JPEG_FINE, out retError);
+                        Logger.Info($"PreferJpeg: set still quality to JPEG (err={retError}).");
+                    }
 
                     ret = LMX_func_api_SS_Get_Capability(ref SS_CapaInfo, out retError);
                     ret = LMX_func_api_ISO_Get_Capability(ref Iso_CapaInfo, out retError);
@@ -734,7 +782,7 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
                 } catch (Exception ex) {
                     Logger.Error(ex);
                 }
-                return !_lmxConnectDeviceInfo.IsEqual(null);
+                return _connected;
             });
         }
 
@@ -747,12 +795,16 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
                     returnV = LumixCam.LMX_func_api_Delete_CallBackInfo((uint)Lmx_event_id.LMX_DEF_LIB_EVENT_ID_SHUTTER);
                     returnV = LumixCam.LMX_func_api_Delete_CallBackInfo((uint)Lmx_event_id.LMX_DEF_LIB_EVENT_ID_ISO);
 
-                    ret = LumixCam.LMX_func_api_Close_Session(out retError);
-                    ret = LumixCam.LMX_func_api_Close_Device(out retError);//see if this make a difference
+                    if (NativeBinding.ExtendedMode) {
+                        LumixCam.Ext_Disconnect(out retError);
+                    } else {
+                        ret = LumixCam.LMX_func_api_Close_Session(out retError);
+                        ret = LumixCam.LMX_func_api_Close_Device(out retError);//see if this make a difference
+                    }
                 } catch (Exception ex) {
                     Logger.Error(ex);
-                    _lmxConnectDeviceInfo.Equals(null);
-                    _lmxDevInfo.Equals(null);
+                } finally {
+                    _connected = false;
                 }
             }
         }

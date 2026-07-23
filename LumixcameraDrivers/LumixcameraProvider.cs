@@ -32,6 +32,11 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
             this.profileService = profileService;
             this.exposureDataFactory = exposureDataFactory;
 
+            // Pick the DLL to bind (bundled public SDK, or the user's installed LUMIX Tether) BEFORE any P/Invoke.
+            NativeBinding.Initialize(
+                Properties.Settings.Default.UseTetherExtended,
+                Properties.Settings.Default.TetherDllPath);
+
             try {
                 LumixCam.LMX_func_api_Init();
             } catch (Exception ex) {
@@ -48,14 +53,24 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
 
             if (this.driver != null) {
                 try {
-                    uint GotDevices = LumixCam.LMX_func_api_Get_PnPDeviceInfo(ref devInfo, out retError);
-                    uint countDevices = devInfo.find_PnpDevice_Count;
+                    if (NativeBinding.ExtendedMode) {
+                        // Extended (LUMIX Tether) enumeration: raw device-info buffer -> model names.
+                        var names = LumixCam.Ext_Enumerate(out retError);
+                        for (int i = 0; i < names.Length; i++) {
+                            var di = new LumixCam.LMX_DEVINFO { dev_ModelName = names[i] };
+                            devices.Add(new LumixcameraDriver(profileService, exposureDataFactory, di, default, i));
+                        }
+                        Logger.Info($"Found {names.Length} Lumix Cameras (LUMIX Tether extended mode)");
+                    } else {
+                        uint GotDevices = LumixCam.LMX_func_api_Get_PnPDeviceInfo(ref devInfo, out retError);
+                        uint countDevices = devInfo.find_PnpDevice_Count;
 
-                    for (int i = 0; i < countDevices; i++) {
-                        devices.Add(new LumixcameraDriver(profileService, exposureDataFactory, devInfo.find_PnpDevice_Info[i], devInfo, i));
+                        for (int i = 0; i < countDevices; i++) {
+                            devices.Add(new LumixcameraDriver(profileService, exposureDataFactory, devInfo.find_PnpDevice_Info[i], devInfo, i));
+                        }
+
+                        Logger.Info($"Found {countDevices} Lumix Cameras");
                     }
-
-                    Logger.Info($"Found {countDevices} Lumix Cameras");
                 } catch (Exception ex) {
                     Logger.Error(ex);
                 }

@@ -156,6 +156,39 @@ namespace Roberthasson.NINA.Lumixcamera {
             }
         }
 
+        public bool UseTetherExtended {
+            get {
+                return Settings.Default.UseTetherExtended;
+            }
+            set {
+                Settings.Default.UseTetherExtended = value;
+                CoreUtil.SaveSettings(Settings.Default);
+                RaisePropertyChanged();
+            }
+        }
+
+        public string TetherDllPath {
+            get {
+                return Settings.Default.TetherDllPath;
+            }
+            set {
+                Settings.Default.TetherDllPath = value;
+                CoreUtil.SaveSettings(Settings.Default);
+                RaisePropertyChanged();
+            }
+        }
+
+        public bool PreferJpeg {
+            get {
+                return Settings.Default.PreferJpeg;
+            }
+            set {
+                Settings.Default.PreferJpeg = value;
+                CoreUtil.SaveSettings(Settings.Default);
+                RaisePropertyChanged();
+            }
+        }
+
         public string ProfileSpecificNotificationMessage {
             get {
                 return pluginSettings.GetValueString(nameof(ProfileSpecificNotificationMessage), string.Empty);

@@ -7,6 +7,29 @@
     <!--  Furthermore the Resource Dictionary has to be exported via code behind export attributes  -->
     <DataTemplate x:Key="LumixCamera_Options">
         <StackPanel Orientation="Vertical">
+            <TextBlock FontWeight="Bold" Margin="0,0,0,4" Text="Extended features (LUMIX Tether)" />
+            <StackPanel Orientation="Horizontal" Margin="0,0,0,2">
+                <CheckBox IsChecked="{Binding UseTetherExtended}" VerticalAlignment="Center" />
+                <TextBlock Margin="6,0,0,0" VerticalAlignment="Center">
+                    <TextBlock.Text>Use LUMIX Tether extended features (BULB, RAW/JPG, battery, real camera state)</TextBlock.Text>
+                    <TextBlock.ToolTip>Requires Panasonic's free LUMIX Tether installed and CLOSED (it can't run at the same time as NINA). The plugin loads the DLL from your install — it is never bundled. Reconnect the camera after changing.</TextBlock.ToolTip>
+                </TextBlock>
+            </StackPanel>
+            <StackPanel Orientation="Horizontal" Margin="0,0,0,2">
+                <TextBlock VerticalAlignment="Center">
+                    <TextBlock.Text>LUMIX Tether DLL path (optional)</TextBlock.Text>
+                    <TextBlock.ToolTip>Leave blank to auto-detect at C:\Program Files\Panasonic\LUMIX Tether\Lmxptpif.dll</TextBlock.ToolTip>
+                </TextBlock>
+                <TextBox MinWidth="240" Margin="6,0,0,0" Text="{Binding TetherDllPath}" />
+            </StackPanel>
+            <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+                <CheckBox IsChecked="{Binding PreferJpeg}" VerticalAlignment="Center" />
+                <TextBlock Margin="6,0,0,0" VerticalAlignment="Center">
+                    <TextBlock.Text>Prefer JPEG (workaround for cameras whose RAW NINA can't decode, e.g. GH7)</TextBlock.Text>
+                    <TextBlock.ToolTip>Extended mode only. Forces JPEG capture so the preview always displays. Reconnect after changing.</TextBlock.ToolTip>
+                </TextBlock>
+            </StackPanel>
+            <Separator Margin="0,0,0,8" />
             <!--<StackPanel Orientation="Horizontal">
                 <TextBlock Text="Default Notification Message" />
                 <TextBox MinWidth="50" Text="{Binding DefaultNotificationMessage}" />

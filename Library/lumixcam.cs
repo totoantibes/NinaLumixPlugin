@@ -18,7 +18,7 @@ using System.IO;
 
 namespace LumixWrapper {
 
-    public unsafe class LumixCam : IDisposable {
+    public unsafe partial class LumixCam : IDisposable {
         public const string DLLNAME = "Lmxptpif.dll";
 
         //static LumixCam() {
@@ -1361,14 +1361,14 @@ namespace LumixWrapper {
         //
         // ISO
         //
-        [DllImport(DLLNAME, ExactSpelling = true, CallingConvention = cc)]
-        public static extern byte LMX_func_api_ISO_Get_Capability(ref LMX_STRUCT_ISO_CAPA_INFO pIsoCapaInfo, out uint retError);
+        [DllImport(DLLNAME, EntryPoint = "LMX_func_api_ISO_Get_Capability", ExactSpelling = true, CallingConvention = cc)]
+        private static extern byte Pub_ISO_Get_Capability(ref LMX_STRUCT_ISO_CAPA_INFO pIsoCapaInfo, out uint retError);
 
-        [DllImport(DLLNAME, ExactSpelling = true, CallingConvention = cc)]
-        public static extern byte LMX_func_api_ISO_Get_Param(out uint pulParam, out uint retError);
+        [DllImport(DLLNAME, EntryPoint = "LMX_func_api_ISO_Get_Param", ExactSpelling = true, CallingConvention = cc)]
+        private static extern byte Pub_ISO_Get_Param(out uint pulParam, out uint retError);
 
-        [DllImport(DLLNAME, ExactSpelling = true, CallingConvention = cc)]
-        public static extern byte LMX_func_api_ISO_Set_Param(uint ulParam, out uint retError);
+        [DllImport(DLLNAME, EntryPoint = "LMX_func_api_ISO_Set_Param", ExactSpelling = true, CallingConvention = cc)]
+        private static extern byte Pub_ISO_Set_Param(uint ulParam, out uint retError);
 
         [DllImport(DLLNAME, ExactSpelling = true, CallingConvention = cc)]
         public static extern byte LMX_func_api_ISO_Get_UpperLimit(out uint pulParam, out uint retError);
@@ -1380,14 +1380,14 @@ namespace LumixWrapper {
         //
         // ShutterSpeed
         //
-        [DllImport(DLLNAME, ExactSpelling = true, CallingConvention = cc)]
-        public static extern byte LMX_func_api_SS_Get_Capability(ref LMX_STRUCT_SS_CAPA_INFO pSS_CapaInfo, out uint retError);
+        [DllImport(DLLNAME, EntryPoint = "LMX_func_api_SS_Get_Capability", ExactSpelling = true, CallingConvention = cc)]
+        private static extern byte Pub_SS_Get_Capability(ref LMX_STRUCT_SS_CAPA_INFO pSS_CapaInfo, out uint retError);
 
-        [DllImport(DLLNAME, ExactSpelling = true, CallingConvention = cc)]
-        public static extern byte LMX_func_api_SS_Get_Param(out int pulParam, out uint retError);
+        [DllImport(DLLNAME, EntryPoint = "LMX_func_api_SS_Get_Param", ExactSpelling = true, CallingConvention = cc)]
+        private static extern byte Pub_SS_Get_Param(out int pulParam, out uint retError);
 
-        [DllImport(DLLNAME, ExactSpelling = true, CallingConvention = cc)]
-        public static extern byte LMX_func_api_SS_Set_Param(long ulParam, out uint retError);
+        [DllImport(DLLNAME, EntryPoint = "LMX_func_api_SS_Set_Param", ExactSpelling = true, CallingConvention = cc)]
+        private static extern byte Pub_SS_Set_Param(long ulParam, out uint retError);
 
         [DllImport(DLLNAME, ExactSpelling = true, CallingConvention = cc)]
         public static extern byte LMX_func_api_SS_Get_RangeLimit(out uint pulMinParam, out uint pulMaxParam, out uint retError);
@@ -1501,8 +1501,8 @@ namespace LumixWrapper {
         //
         // Camera Mode Info
         //
-        [DllImport(DLLNAME, ExactSpelling = true, CallingConvention = cc)]
-        public static extern byte LMX_func_api_CameraMode_Get_Capability(ref LMX_STRUCT_RECINFO_CAMERA_MODE_CAPA_INFO pCameraMode_CapaInfo, out uint retError);
+        [DllImport(DLLNAME, EntryPoint = "LMX_func_api_CameraMode_Get_Capability", ExactSpelling = true, CallingConvention = cc)]
+        private static extern byte Pub_CameraMode_Get_Capability(ref LMX_STRUCT_RECINFO_CAMERA_MODE_CAPA_INFO pCameraMode_CapaInfo, out uint retError);
 
         [DllImport(DLLNAME, ExactSpelling = true, CallingConvention = cc)]
         public static extern byte LMX_func_api_CameraMode_Get_DriveMode(out uint pulParam, out uint retError);
@@ -1569,8 +1569,8 @@ namespace LumixWrapper {
         //
         // Execution system: Photographing system
         //
-        [DllImport(DLLNAME, ExactSpelling = true, CallingConvention = cc)]
-        public static extern byte LMX_func_api_Rec_Ctrl_Release(ref LMX_STRUCT_REC_CTRL lpRecCtrl, out uint retError);
+        [DllImport(DLLNAME, EntryPoint = "LMX_func_api_Rec_Ctrl_Release", ExactSpelling = true, CallingConvention = cc)]
+        private static extern byte Pub_Rec_Ctrl_Release(ref LMX_STRUCT_REC_CTRL lpRecCtrl, out uint retError);
 
         [DllImport(DLLNAME, ExactSpelling = true, CallingConvention = cc)]
         public static extern byte LMX_func_api_Rec_Ctrl_AF_AE(ref LMX_STRUCT_REC_CTRL lpRecCtrl, out uint retError);
@@ -1595,17 +1595,17 @@ namespace LumixWrapper {
         //
         // Object system:
         //
-        [DllImport(DLLNAME, ExactSpelling = true, CallingConvention = cc)]
-        public static extern byte LMX_func_api_Get_Object(uint ObjectHandle, ref byte lpStoreBufAdder, uint StoreBufSize, out uint retError);
+        [DllImport(DLLNAME, EntryPoint = "LMX_func_api_Get_Object", ExactSpelling = true, CallingConvention = cc)]
+        private static extern byte Pub_Get_Object(uint ObjectHandle, ref byte lpStoreBufAdder, uint StoreBufSize, out uint retError);
 
-        [DllImport(DLLNAME, ExactSpelling = true, CallingConvention = cc)]
-        public static extern byte LMX_func_api_Get_Object_FormatType(uint ObjHandle, out uint pFormatType, out uint retError);
+        [DllImport(DLLNAME, EntryPoint = "LMX_func_api_Get_Object_FormatType", ExactSpelling = true, CallingConvention = cc)]
+        private static extern byte Pub_Get_Object_FormatType(uint ObjHandle, out uint pFormatType, out uint retError);
 
-        [DllImport(DLLNAME, ExactSpelling = true, CallingConvention = cc)]
-        public static extern byte LMX_func_api_Get_Object_DataSize(uint ObjHandle, out uint pDataSize, out uint retError);
+        [DllImport(DLLNAME, EntryPoint = "LMX_func_api_Get_Object_DataSize", ExactSpelling = true, CallingConvention = cc)]
+        private static extern byte Pub_Get_Object_DataSize(uint ObjHandle, out uint pDataSize, out uint retError);
 
-        [DllImport(DLLNAME, ExactSpelling = true, CallingConvention = cc)]
-        public static extern byte LMX_func_api_Get_Object_FileName(uint ObjHandle, ref LMX_STRUCT_PTP_ARRAY_STRING pFileName, out uint retError);
+        [DllImport(DLLNAME, EntryPoint = "LMX_func_api_Get_Object_FileName", ExactSpelling = true, CallingConvention = cc)]
+        private static extern byte Pub_Get_Object_FileName(uint ObjHandle, ref LMX_STRUCT_PTP_ARRAY_STRING pFileName, out uint retError);
 
         [DllImport(DLLNAME, ExactSpelling = true, CallingConvention = cc)]
         public static extern byte LMX_func_api_Get_Partial_Object(
@@ -1635,14 +1635,14 @@ namespace LumixWrapper {
         //
         // LiveView system:
         //
-        [DllImport(DLLNAME, ExactSpelling = true, CallingConvention = cc)]
-        public static extern byte LMX_func_api_Ctrl_LiveView_Start(out uint retError);
+        [DllImport(DLLNAME, EntryPoint = "LMX_func_api_Ctrl_LiveView_Start", ExactSpelling = true, CallingConvention = cc)]
+        private static extern byte Pub_Ctrl_LiveView_Start(out uint retError);
 
-        [DllImport(DLLNAME, ExactSpelling = true, CallingConvention = cc)]
-        public static extern byte LMX_func_api_Ctrl_LiveView_Stop(out uint retError);
+        [DllImport(DLLNAME, EntryPoint = "LMX_func_api_Ctrl_LiveView_Stop", ExactSpelling = true, CallingConvention = cc)]
+        private static extern byte Pub_Ctrl_LiveView_Stop(out uint retError);
 
-        [DllImport(DLLNAME, ExactSpelling = true, CallingConvention = cc)]
-        public static extern byte LMX_func_api_Get_LiveView_data(
+        [DllImport(DLLNAME, EntryPoint = "LMX_func_api_Get_LiveView_data", ExactSpelling = true, CallingConvention = cc)]
+        private static extern byte Pub_Get_LiveView_data(
             ref LMX_STRUCT_LIVEVIEW_INFO_HISTGRAM pHistBuf,
             out uint pHistSize,
             ref LMX_STRUCT_LIVEVIEW_INFO_POSTURE pPostBuf,

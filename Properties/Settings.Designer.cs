@@ -58,6 +58,42 @@ namespace Roberthasson.NINA.Lumixcamera.Properties {
                 this["SensorHeight"] = value;
             }
         }
+
+        [global::System.Configuration.UserScopedSettingAttribute()]
+        [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
+        [global::System.Configuration.DefaultSettingValueAttribute("False")]
+        public bool UseTetherExtended {
+            get {
+                return ((bool)(this["UseTetherExtended"]));
+            }
+            set {
+                this["UseTetherExtended"] = value;
+            }
+        }
+
+        [global::System.Configuration.UserScopedSettingAttribute()]
+        [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
+        [global::System.Configuration.DefaultSettingValueAttribute("")]
+        public string TetherDllPath {
+            get {
+                return ((string)(this["TetherDllPath"]));
+            }
+            set {
+                this["TetherDllPath"] = value;
+            }
+        }
+
+        [global::System.Configuration.UserScopedSettingAttribute()]
+        [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
+        [global::System.Configuration.DefaultSettingValueAttribute("False")]
+        public bool PreferJpeg {
+            get {
+                return ((bool)(this["PreferJpeg"]));
+            }
+            set {
+                this["PreferJpeg"] = value;
+            }
+        }
         
         [global::System.Configuration.UserScopedSettingAttribute()]
         [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
