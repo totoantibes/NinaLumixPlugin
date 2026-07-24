@@ -63,7 +63,7 @@ The plugin runs in one of two modes, selected in the plugin options:
 Extended-mode features:
 * Bulb / exposures beyond 60 s (exact durations)
 * Sub-second and full-range shutter speeds, snapped to the nearest supported value so the Flat Wizard converges
-* RAW / JPEG image-quality selection
+* Image-quality control: automatically switches the camera to RAW on connect for full-quality colour frames (Prefer JPEG forces JPEG for the RAW-decode workaround). Standard mode cannot change image quality - it only warns if the camera captures JPEG instead of RAW
 * Battery information
 * Live camera-mode reading, including the C1-C3 custom presets
 * Save destination: SD card, directly to the PC (cardless), or both

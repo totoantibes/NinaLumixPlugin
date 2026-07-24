@@ -11,7 +11,7 @@ The plugin runs in one of two modes, selected in the plugin options:
 * **Extended mode (optional).** Loads the DLL from a local install of Panasonic's free [LUMIX Tether application](https://av.jpn.support.panasonic.com/support/global/cs/soft/download/d_lumixtether.html) — the plugin never bundles it. This unlocks capabilities the public SDK lacks:
   * **Bulb / exposures beyond 60 s** (tested to over a minute; the shutter is held open for the requested time).
   * **Sub-second and full-range shutter speeds**, snapped to the nearest supported value so N.I.N.A.'s Flat Wizard converges.
-  * **Image quality** selection (RAW / JPEG), including a *Prefer JPEG* option.
+  * **Image-quality control**: automatically switches the camera to **RAW** on connect so you always get full-quality colour frames (with a *Prefer JPEG* option to force JPEG for the RAW-decode workaround). In standard mode the plugin cannot change image quality — the camera must be set to RAW on the body, and the plugin only warns if it captures JPEG.
   * **Battery** information and live **camera-mode** reading (including the C1–C3 custom presets).
   * **Save destination**: SD card, directly to the PC (cardless), or both.
   * A **real capture-complete event** instead of waiting on the SD-card file.
