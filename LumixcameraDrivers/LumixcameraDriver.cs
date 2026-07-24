@@ -895,10 +895,12 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
         public void Disconnect() {
             if (!Connected) { return; }
             Logger.Info("[Lumix] Disconnect: start");
+            _connected = false;                 // report disconnected immediately — NINA's Disconnect() never blocks
             try { bulbCompletionCTS?.Cancel(); } catch { }
-            // Run the native teardown on a worker with a timeout so a blocking SDK call can never freeze NINA.
-            // Each step is logged so the last line before a timeout pinpoints which call stalls.
-            var cleanup = Task.Run(() => {
+            // Native teardown is fire-and-forget: some SDK calls (CloseSession after a bulb) can block for a long
+            // time, and we must never freeze NINA. If a call stalls it leaks a worker thread, but the UI stays
+            // responsive. Each step is logged so the last line before it stops shows which call stalls.
+            Task.Run(() => {
                 try {
                     Logger.Info("[Lumix] Disconnect: delete callbacks");
                     LumixCam.LMX_func_api_Delete_CallBackInfo((uint)Lmx_event_id.LMX_DEF_LIB_EVENT_ID_OBJCT_ADD);
@@ -907,6 +909,12 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
                     LumixCam.LMX_func_api_Delete_CallBackInfo((uint)Lmx_event_id.LMX_DEF_LIB_EVENT_ID_SHUTTER);
                     LumixCam.LMX_func_api_Delete_CallBackInfo((uint)Lmx_event_id.LMX_DEF_LIB_EVENT_ID_ISO);
                     if (NativeBinding.ExtendedMode) {
+                        // Take the camera out of BULB before closing the session — a lingering bulb state appears
+                        // to hang CloseSession (a plain, non-bulb disconnect closes fine).
+                        try {
+                            byte sr = LMX_func_api_SS_Set_Param((1 * 1000) | 0x80000000, out uint sserr);
+                            Logger.Info($"[Lumix] Disconnect: exit BULB (SS=1s) ret={sr} err={sserr}");
+                        } catch (Exception sx) { Logger.Error("[Lumix] Disconnect: exit-BULB threw: " + sx); }
                         if (Properties.Settings.Default.SaveTarget != LumixCam.SAVE_TARGET_SD) {
                             Logger.Info("[Lumix] Disconnect: restore SD target");
                             LumixCam.LMX_func_api_SetupFilesConfig_Set_Target(LumixCam.SAVE_TARGET_SD, out retError);
@@ -921,11 +929,7 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
                     Logger.Info("[Lumix] Disconnect: native teardown done");
                 } catch (Exception ex) { Logger.Error("[Lumix] Disconnect teardown threw: " + ex); }
             });
-            if (!cleanup.Wait(TimeSpan.FromSeconds(6))) {
-                Logger.Warning("[Lumix] Disconnect: native teardown timed out (6s) — continuing; an SDK call is stuck.");
-            }
-            _connected = false;
-            Logger.Info("[Lumix] Disconnect: end");
+            Logger.Info("[Lumix] Disconnect: returned (teardown running async)");
         }
     }
 }
