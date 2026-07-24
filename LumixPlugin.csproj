@@ -3,7 +3,10 @@
     <TargetFramework>net8.0-windows</TargetFramework>
     <OutputType>Library</OutputType>
     <RootNamespace>Roberthasson.NINA.Lumixcamera</RootNamespace>
-    <AssemblyName>Roberthasson.NINA.Lumixcamera</AssemblyName>
+    <!-- Assembly (DLL) filename must stay LumixPlugin to match the published 1.0.0.30/1.1.0.30
+         installer payload, so an in-place update overwrites the same file instead of leaving a
+         second same-GUID DLL in the install folder. Code namespace stays RootNamespace above. -->
+    <AssemblyName>LumixPlugin</AssemblyName>
     <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
     <UseWPF>true</UseWPF>
     <ImportWindowsDesktopTargets>true</ImportWindowsDesktopTargets>
