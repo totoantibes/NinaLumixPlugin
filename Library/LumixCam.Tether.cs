@@ -46,7 +46,7 @@ namespace LumixWrapper {
 
         // Device-info (Tether layout, array-max 64): count@0, IDs=IntPtr[64]@8, LMX_DEVINFO[64]@520 (stride 1036),
         // dev_Index@entry+0, dev_ModelName (Unicode, 256) @entry+4.
-        private const int EXT_DEVINFO_BASE = 520, EXT_DEVINFO_STRIDE = 1036, EXT_MODELNAME_OFF = 4;
+        private const int EXT_DEVINFO_BASE = 520, EXT_DEVINFO_STRIDE = 1036, EXT_MODELNAME_OFF = 520;
 
         // ===================== Extended externs (Tether DLL) =====================
         [DllImport(DLLNAME, EntryPoint = "LMX_func_api_GetPnPDeviceInfo", ExactSpelling = true, CallingConvention = cc)]

@@ -486,25 +486,16 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
 
         public string Id => "Lumix";
 
+        // Return the enumerated model name even before connecting, so the camera shows up (named) in NINA's
+        // camera picker — the driver isn't Connected yet when the chooser renders it.
         public string Name {
             get {
-                if (Connected) {
-                    return _lmxDevInfo.dev_ModelName;
-                } else {
-                    return string.Empty;
-                }
+                var n = _lmxDevInfo.dev_ModelName;
+                return string.IsNullOrWhiteSpace(n) ? "Lumix Camera" : n;
             }
         }
 
-        public string DisplayName {
-            get {
-                if (Connected) {
-                    return _lmxDevInfo.dev_ModelName;
-                } else {
-                    return string.Empty;
-                }
-            }
-        }
+        public string DisplayName => Name;
 
         public string Category { get => "Lumix"; }
 
