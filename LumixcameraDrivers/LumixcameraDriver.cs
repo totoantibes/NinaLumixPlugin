@@ -279,7 +279,7 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
                 if (!Connected) { return 0; }
                 if (_ssTable == null || _ssTable.Count == 0) { BuildSsTable(); }
                 double listMax = (_ssTable != null && _ssTable.Count > 0) ? _ssTable.Max(e => e.seconds) : 60;
-                // Extended mode supports Bulb (>60s) via the RE'd open/hold/close sequence, so allow long
+                // Extended mode supports Bulb (>60s) via the open/hold/close shutter sequence, so allow long
                 // exposures (cap at 1 hour). Standard mode is limited to the discrete list (<=60s).
                 return NativeBinding.ExtendedMode ? Math.Max(listMax, 3600) : listMax;
             }
@@ -588,7 +588,7 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
                         _downloadExposure.TrySetCanceled();
                         return;
                     }
-                    // Bulb (>60s): RE'd from the LUMIX Tether app — SS=BULB, open shutter (0x12), hold for the
+                    // Bulb (>60s): extended-mode shutter sequence — SS=BULB, open shutter (0x12), hold for the
                     // exposure time, then close (0x13) + finalize (0x19). Completion arrives via OBJCT_ADD like a
                     // normal frame. The close is scheduled on a cancellable timer so Stop/Abort ends it early.
                     if (!LumixCam.Ext_EnsureBulb(out retError)) {

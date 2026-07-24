@@ -9,7 +9,7 @@ namespace LumixWrapper {
     /// the bundled public SDK entry point (Pub_*) or the Tether DLL entry point (Ext_*), based on
     /// <see cref="NativeBinding.ExtendedMode"/>.
     ///
-    /// The Tether ABI differs from the public headers in two systematic ways (reverse-engineered):
+    /// The Tether ABI differs from the public headers in two systematic ways:
     ///   * 28 core functions are CamelCase (OpenSession vs Open_Session) — handled by EntryPoint=.
     ///   * post-connection ops take an EXTRA device-context pointer inserted just before retError.
     /// The context is produced by the 7-arg SelectPnPDevice at connect and held in <see cref="_tetherCtx"/>.
