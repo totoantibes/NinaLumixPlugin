@@ -402,18 +402,31 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
 
         public bool CanSetGain => CanGetGain;
 
-        // Use the filtered Gains list (real ISO values, no Auto/i-ISO/Unknown sentinels) and guard the empty
-        // case, so these never return a garbage huge value nor throw when the ISO list is unavailable.
-        public int GainMax => (Connected && Gains != null && Gains.Count > 0) ? Gains.Max() : 0;
+        // Gains is a populated discrete list, so NINA treats Gain as an INDEX into it — min/max are the index
+        // bounds (0 .. count-1), not ISO values.
+        public int GainMax => (Connected && Gains != null && Gains.Count > 0) ? Gains.Count - 1 : 0;
 
-        public int GainMin => (Connected && Gains != null && Gains.Count > 0) ? Gains.Min() : 0;
+        public int GainMin => 0;
 
+        // NINA/ASCOM convention: when Gains (a discrete list) is populated, Gain is the INDEX into it, not the
+        // raw ISO value. Map the camera's current ISO to its index for the getter, and the index back to the
+        // camera's original raw ISO value (which carries the extended-ISO markers) for the setter.
         public int Gain {
             get {
-                return ((int)Iso_CapaInfo.CurVal);
+                _ = Gains; // ensure _gains/_gainsRaw are built
+                if (_gainsRaw != null) {
+                    uint cur = Iso_CapaInfo.CurVal;
+                    int idx = _gainsRaw.IndexOf(cur);
+                    if (idx < 0) { idx = _gains.IndexOf((int)(cur & 0x0FFFFFFF)); }
+                    if (idx >= 0) { return idx; }
+                }
+                return 0;
             }
             set {
-                ret = LMX_func_api_ISO_Set_Param(((uint)value), out retError);
+                _ = Gains;
+                if (_gainsRaw != null && value >= 0 && value < _gainsRaw.Count) {
+                    ret = LMX_func_api_ISO_Set_Param(_gainsRaw[value], out retError);
+                }
             }
         }
 
@@ -435,28 +448,32 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
         public short ReadoutModeForNormalImages { get => 0; set { } }
 
         private IList<int> _gains;
+        private List<uint> _gainsRaw;   // original raw ISO values aligned with _gains (for the setter)
 
         public IList<int> Gains {
             get {
                 if (_gains == null) {
                     _gains = new List<int>();
+                    _gainsRaw = new List<uint>();
                     // Iterate only the valid entries (NumOfVal), not the fixed 512-slot array — the tail is
                     // zeros and was flooding the gain list (also broke the old plugin). Skip the Auto/i-ISO/
-                    // Unknown sentinels and mask the extended-ISO markers to their value (e.g. 0x20019000 ->
-                    // 102400, 0x10000050 -> 80).
+                    // Unknown sentinels; the display ISO is the masked value (0x20019000 -> 102400), but keep the
+                    // ORIGINAL raw value (with markers) so the setter sends exactly what the camera reported.
                     var isoSupport = Iso_CapaInfo.Capa_Enum.SupportVal;
                     if (isoSupport != null) {
                         int isoCount = Iso_CapaInfo.Capa_Enum.NumOfVal;
                         if (isoCount <= 0 || isoCount > isoSupport.Length) { isoCount = isoSupport.Length; }
+                        var pairs = new List<KeyValuePair<int, uint>>();
                         for (int i = 0; i < isoCount; i++) {
                             uint val = (uint)isoSupport[i];
                             if (val == (uint)Lmx_def_lib_ISO_param.LMX_DEF_ISO_AUTO) { continue; }
                             if (val == (uint)Lmx_def_lib_ISO_param.LMX_DEF_ISO_I_ISO) { continue; }
                             if (val == (uint)Lmx_def_lib_ISO_param.LMX_DEF_ISO_UNKNOWN) { continue; }
                             int iso = (int)(val & 0x0FFFFFFF);
-                            if (iso > 0) { _gains.Add(iso); }
+                            if (iso > 0) { pairs.Add(new KeyValuePair<int, uint>(iso, val)); }
                         }
-                        ((List<int>)_gains).Sort();
+                        pairs.Sort((a, b) => a.Key.CompareTo(b.Key));
+                        foreach (var p in pairs) { _gains.Add(p.Key); _gainsRaw.Add(p.Value); }
                     }
                 }
 
@@ -792,7 +809,7 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
                     ret = LMX_func_api_ISO_Get_Capability(ref Iso_CapaInfo, out retError);
                     // Rebuild the cached lists from THIS connection's fresh capability data (a reconnect reuses
                     // the driver, and stale/empty caches left gain unpopulated).
-                    _gains = null; _ssTable = null; _exposures = null;
+                    _gains = null; _gainsRaw = null; _ssTable = null; _exposures = null;
 
                     // Warn (never block) about the exposure mode. Use the dedicated Get_Mode_Pos getter, not the
                     // CameraMode capability struct (whose Tether-buffer layout differs, so CurVal_mode_pos read
