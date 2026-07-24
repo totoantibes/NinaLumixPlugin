@@ -140,8 +140,32 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
                 Logger.Info($"[LumixCapture] Get_Object ret={gr} err={retError}; magic={buffer[0]:X2} {buffer[1]:X2} {buffer[2]:X2} {buffer[3]:X2}");
             }
 
+            // Guard against a bogus object. On the first frame of a session the camera can fire an OBJCT event
+            // for a placeholder/association object whose Get_Object fails (ret=0) and returns a zero-filled buffer
+            // (observed as format 0x3, 128 KB). Forwarding that to NINA makes LibRaw throw "not a RAW file". Only
+            // complete the download once we've actually pulled a recognisable image; otherwise ignore this object
+            // and keep awaiting the real frame — the valid RW2/JPEG arrives on the next OBJCT event.
+            if (gr != LMX_BOOL_TRUE || !IsKnownImageHeader(buffer, dataSize)) {
+                Logger.Warning($"[LumixCapture] object 0x{cb_event_param:X} is not a usable image (ret={gr}, format=0x{formatType:X}, size={dataSize}) — ignoring, waiting for the real frame.");
+                // A cardless PC-transfer request must still be released or the camera keeps a pending write and won't power off.
+                if (cb_event_param == CARDLESS_TRNSFER_HDL) {
+                    LMX_func_api_Skip_Object_Transfer(cb_event_param, out uint _skipErr);
+                }
+                return;   // do NOT complete the exposure with junk data
+            }
+
             _downloadExposure.TrySetResult(null);
             return;
+        }
+
+        // A recognisable still-image header: Panasonic RW2 ("IIU\0"), TIFF (RW2 is TIFF-based), or JPEG.
+        private static bool IsKnownImageHeader(byte[] b, uint size) {
+            if (b == null || size < 4) { return false; }
+            if (b[0] == 0x49 && b[1] == 0x49 && b[2] == 0x55 && b[3] == 0x00) { return true; } // IIU\0  RW2
+            if (b[0] == 0x49 && b[1] == 0x49 && b[2] == 0x2A && b[3] == 0x00) { return true; } // II*\0  TIFF LE
+            if (b[0] == 0x4D && b[1] == 0x4D && b[2] == 0x00 && b[3] == 0x2A) { return true; } // MM\0*  TIFF BE
+            if (b[0] == 0xFF && b[1] == 0xD8 && b[2] == 0xFF) { return true; }                 // JPEG
+            return false;
         }
 
         // ---- Extended-mode helpers: manual-mode whitelist + shutter-speed snapping ----
