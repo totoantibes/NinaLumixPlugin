@@ -241,9 +241,9 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
 
         public SensorType SensorType { get => SensorType.RGGB; set => throw new NotImplementedException(); }
 
-        public short BayerOffsetX { get => 1; set => throw new NotImplementedException(); }
+        public short BayerOffsetX { get => 0; set => throw new NotImplementedException(); }
 
-        public short BayerOffsetY { get => 1; set => throw new NotImplementedException(); }
+        public short BayerOffsetY { get => 0; set => throw new NotImplementedException(); }
 
         public int CameraXSize {
             get {
