@@ -36,6 +36,15 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
             NativeBinding.Initialize(
                 Properties.Settings.Default.UseTetherExtended,
                 Properties.Settings.Default.TetherDllPath);
+            // If extended features were requested but the Tether DLL wasn't found, we transparently fall back
+            // to the standard SDK — tell the user (log + a UI notice) rather than silently dropping features.
+            if (Properties.Settings.Default.UseTetherExtended && !NativeBinding.ExtendedMode) {
+                try {
+                    global::NINA.Core.Utility.Notification.Notification.ShowWarning(
+                        "LUMIX Tether extended features are enabled but the LUMIX Tether DLL was not found. " +
+                        "Install LUMIX Tether (or set its path in the plugin options). Using the standard SDK (max 60s).");
+                } catch { }
+            }
 
             try {
                 LumixCam.LMX_func_api_Init();

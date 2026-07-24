@@ -582,17 +582,15 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
                 _downloadExposure = new TaskCompletionSource<object>();
                 if (_exposures == null) { _ = ExposureMin; }   // lazily build the discrete exposure list (was NRE on 1st shot)
 
-                if (exposureTime > 60.0) {
-                    if (!NativeBinding.ExtendedMode) {
-                        Notification.ShowWarning("Exposures over 60s need extended (LUMIX Tether) mode. Standard mode is capped at 60s.");
-                        _downloadExposure.TrySetCanceled();
-                        return;
-                    }
-                    // Bulb (>60s): extended-mode shutter sequence — SS=BULB, open shutter (0x12), hold for the
-                    // exposure time, then close (0x13) + finalize (0x19). Completion arrives via OBJCT_ADD like a
-                    // normal frame. The close is scheduled on a cancellable timer so Stop/Abort ends it early.
+                // Extended mode: use BULB for ANY exposure longer than 1s so arbitrary / unlisted durations
+                // (e.g. 7s, or >60s) are timed exactly, instead of snapping to the nearest discrete shutter
+                // speed. Sub-second (<=1s) still uses the discrete speeds (bulb has a ~1s practical floor).
+                // SS=BULB, open shutter (0x12), hold, then close (0x13) + finalize (0x19). Completion arrives
+                // via OBJCT_ADD like a normal frame; the close runs on a cancellable timer so Stop/Abort ends
+                // it early.
+                if (NativeBinding.ExtendedMode && exposureTime > 1.0) {
                     if (!LumixCam.Ext_EnsureBulb(out retError)) {
-                        Notification.ShowWarning("Could not engage BULB mode for a >60s exposure.");
+                        Notification.ShowWarning("Could not engage BULB mode for the exposure.");
                         _downloadExposure.TrySetCanceled();
                         return;
                     }
@@ -613,6 +611,12 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
                         LMX_func_api_Rec_Ctrl_Release(ref bulbFin, out uint fe);
                         Logger.Info($"[LumixBulb] close (0x13, err={ce}) + finalize (0x19, err={fe}) done.");
                     });
+                    return;
+                }
+                if (exposureTime > 60.0) {
+                    // Standard mode has no BULB, so it cannot exceed the 60s discrete-list maximum.
+                    Notification.ShowWarning("Exposures over 60s need extended (LUMIX Tether) mode. Standard mode is capped at 60s.");
+                    _downloadExposure.TrySetCanceled();
                     return;
                 }
 
@@ -880,6 +884,7 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
                 } catch (Exception ex) {
                     Logger.Error(ex);
                 }
+                Logger.Info($"[Lumix] Connected={_connected} ExtendedMode={NativeBinding.ExtendedMode} DLL='{NativeBinding.ActiveDllPath}' ExposureMin={ExposureMin:0.#####}s ExposureMax={ExposureMax:0}s");
                 return _connected;
             });
         }

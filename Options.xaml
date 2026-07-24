@@ -22,14 +22,14 @@
                 </TextBlock>
                 <TextBox MinWidth="240" Margin="6,0,0,0" Text="{Binding TetherDllPath}" />
             </StackPanel>
-            <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+            <StackPanel Orientation="Horizontal" Margin="0,0,0,6" IsEnabled="{Binding UseTetherExtended}">
                 <CheckBox IsChecked="{Binding PreferJpeg}" VerticalAlignment="Center" />
                 <TextBlock Margin="6,0,0,0" VerticalAlignment="Center">
                     <TextBlock.Text>Prefer JPEG (workaround for cameras whose RAW NINA can't decode, e.g. GH7)</TextBlock.Text>
                     <TextBlock.ToolTip>Extended mode only. Forces JPEG capture so the preview always displays. Reconnect after changing.</TextBlock.ToolTip>
                 </TextBlock>
             </StackPanel>
-            <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+            <StackPanel Orientation="Horizontal" Margin="0,0,0,6" IsEnabled="{Binding UseTetherExtended}">
                 <TextBlock VerticalAlignment="Center">
                     <TextBlock.Text>Save destination</TextBlock.Text>
                     <TextBlock.ToolTip>Extended mode only. Where captured images are stored: SD card, directly to the PC (no card needed), or both. Reconnect after changing.</TextBlock.ToolTip>

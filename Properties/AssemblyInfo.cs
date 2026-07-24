@@ -58,7 +58,18 @@ This differs from the ASCOM Driver which interfaces over wifi and http. As the A
 The plugin runs in one of two modes, selected in the plugin options:
 
 * Standard mode (default): uses the public Lumix SDK DLL that ships with the plugin. Exposures are limited to the camera's discrete shutter-speed list, max 60 s (the public SDK cannot do Bulb).
-* Extended mode (optional): loads the DLL from a local install of Panasonic's free [LUMIX Tether application](https://av.jpn.support.panasonic.com/support/global/cs/soft/download/d_lumixtether.html) (never bundled) to unlock capabilities the public SDK lacks: Bulb / exposures beyond 60 s, sub-second and full-range shutter speeds (snapped to the nearest supported value so the Flat Wizard converges), RAW/JPEG image-quality selection, battery info, live camera-mode reading (incl. the C1-C3 custom presets), save destination (SD / PC-cardless / both), and a real capture-complete event. Install LUMIX Tether, close it, then tick 'Use LUMIX Tether extended features' and reconnect; the DLL is auto-detected or a custom path can be set.
+* Extended mode (optional): loads the DLL from a local install of Panasonic's free [LUMIX Tether application](https://av.jpn.support.panasonic.com/support/global/cs/soft/download/d_lumixtether.html) (never bundled) to unlock capabilities the public SDK lacks.
+
+Extended-mode features:
+* Bulb / exposures beyond 60 s (exact durations)
+* Sub-second and full-range shutter speeds, snapped to the nearest supported value so the Flat Wizard converges
+* RAW / JPEG image-quality selection
+* Battery information
+* Live camera-mode reading, including the C1-C3 custom presets
+* Save destination: SD card, directly to the PC (cardless), or both
+* A real capture-complete event instead of waiting on the SD-card file
+
+To enable extended mode: install LUMIX Tether, close it (it can't share the USB with N.I.N.A.), then tick 'Use LUMIX Tether extended features' in the options and reconnect. The DLL is auto-detected at the default install path, or a custom path can be set.
 
 The driver has a list of suported cameras published by [Panasonic](https://av.jpn.support.panasonic.com/support/global/cs/soft/tool/sdk.html)
 The sensor data is derived from the [Digital Camera Database](https://www.digicamdb.com/)
