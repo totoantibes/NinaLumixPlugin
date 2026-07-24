@@ -278,8 +278,10 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
             get {
                 if (!Connected) { return 0; }
                 if (_ssTable == null || _ssTable.Count == 0) { BuildSsTable(); }
-                // Slowest non-bulb speed (BULB is excluded from the table). Bulb >60s is still unsupported.
-                return (_ssTable != null && _ssTable.Count > 0) ? _ssTable.Max(e => e.seconds) : 60;
+                double listMax = (_ssTable != null && _ssTable.Count > 0) ? _ssTable.Max(e => e.seconds) : 60;
+                // Extended mode supports Bulb (>60s) via the RE'd open/hold/close sequence, so allow long
+                // exposures (cap at 1 hour). Standard mode is limited to the discrete list (<=60s).
+                return NativeBinding.ExtendedMode ? Math.Max(listMax, 3600) : listMax;
             }
         }
 
@@ -581,8 +583,36 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
                 if (_exposures == null) { _ = ExposureMin; }   // lazily build the discrete exposure list (was NRE on 1st shot)
 
                 if (exposureTime > 60.0) {
-                    // >60s needs Bulb start/stop, which is not yet supported (open RE item; see README).
-                    Notification.ShowWarning("Exposures over 60s need Bulb mode, which is not yet supported. Maximum is 60s.");
+                    if (!NativeBinding.ExtendedMode) {
+                        Notification.ShowWarning("Exposures over 60s need extended (LUMIX Tether) mode. Standard mode is capped at 60s.");
+                        _downloadExposure.TrySetCanceled();
+                        return;
+                    }
+                    // Bulb (>60s): RE'd from the LUMIX Tether app — SS=BULB, open shutter (0x12), hold for the
+                    // exposure time, then close (0x13) + finalize (0x19). Completion arrives via OBJCT_ADD like a
+                    // normal frame. The close is scheduled on a cancellable timer so Stop/Abort ends it early.
+                    if (!LumixCam.Ext_EnsureBulb(out retError)) {
+                        Notification.ShowWarning("Could not engage BULB mode for a >60s exposure.");
+                        _downloadExposure.TrySetCanceled();
+                        return;
+                    }
+                    var bulbOpen = new LMX_STRUCT_REC_CTRL { CtrlID = (uint)Lmx_TagID_Rec_Ctrl_Release.LMX_DEF_LIB_TAG_REC_CTRL_RELEASE_BULB_START };
+                    bulbOpen.ParamData.NumOfVal = 0;
+                    byte bo = LMX_func_api_Rec_Ctrl_Release(ref bulbOpen, out retError);
+                    Logger.Info($"[LumixBulb] open (0x12) ret={bo} err={retError}; holding {exposureTime}s");
+                    try { bulbCompletionCTS?.Cancel(); } catch { }
+                    bulbCompletionCTS = new CancellationTokenSource();
+                    var bulbToken = bulbCompletionCTS.Token;
+                    bulbCompletionTask = Task.Run(async () => {
+                        try { await CoreUtil.Wait(TimeSpan.FromSeconds(exposureTime), bulbToken); } catch { }
+                        var bulbClose = new LMX_STRUCT_REC_CTRL { CtrlID = (uint)Lmx_TagID_Rec_Ctrl_Release.LMX_DEF_LIB_TAG_REC_CTRL_RELEASE_BULB_STOP };
+                        bulbClose.ParamData.NumOfVal = 0;
+                        LMX_func_api_Rec_Ctrl_Release(ref bulbClose, out uint ce);
+                        var bulbFin = new LMX_STRUCT_REC_CTRL { CtrlID = (uint)Lmx_TagID_Rec_Ctrl_Release.LMX_DEF_LIB_TAG_REC_CTRL_RELEASE_BULB_FINALIZE };
+                        bulbFin.ParamData.NumOfVal = 0;
+                        LMX_func_api_Rec_Ctrl_Release(ref bulbFin, out uint fe);
+                        Logger.Info($"[LumixBulb] close (0x13, err={ce}) + finalize (0x19, err={fe}) done.");
+                    });
                     return;
                 }
 
@@ -626,18 +656,9 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
         }
 
         public void StopExposure() {
-            LMX_STRUCT_SS_CAPA_INFO pSS_CapaInfo = new LMX_STRUCT_SS_CAPA_INFO();
-            LMX_func_api_SS_Get_Capability(ref pSS_CapaInfo, out retError);
-
-            if (Connected && pSS_CapaInfo.Capa_Enum.IsEqual(Lmx_def_lib_DevpropEx_ShutterSpeed_param.LMX_DEF_PTP_DEVPROP_EXT_LMX_SS_BULB)) {
-                LMX_STRUCT_REC_CTRL lmx_rec_ctrl = new LMX_STRUCT_REC_CTRL();
-                lmx_rec_ctrl.CtrlID = ((uint)Lmx_TagID_Rec_Ctrl_Release.LMX_DEF_LIB_TAG_REC_CTRL_RELEASE_ONESHOT);
-                lmx_rec_ctrl.ParamData.NumOfVal = 0;
-                ret = LMX_func_api_Rec_Ctrl_Release(ref lmx_rec_ctrl, out retError);
-                if (retError == LMX_BOOL_FALSE) {
-                    Notification.ShowWarning("Can't stop exposure");
-                }
-            }
+            // End a bulb exposure early: cancelling the hold timer fires the close (0x13) + finalize (0x19)
+            // in the bulb task. For a normal (<=60s) frame there is no timer and nothing to stop.
+            try { bulbCompletionCTS?.Cancel(); } catch { }
         }
 
         public void AbortExposure() {

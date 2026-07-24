@@ -555,8 +555,14 @@ namespace LumixWrapper {
         //
         /////////////////////////////////////////////////
         public enum Lmx_TagID_Rec_Ctrl_Release : ulong {
-            LMX_DEF_LIB_TAG_REC_CTRL_RELEASE_RESRV = Lmx_event_id.LMX_DEF_LIB_EVENT_ID_REC_CTRL_RELEASE,
-            LMX_DEF_LIB_TAG_REC_CTRL_RELEASE_ONESHOT = Lmx_event_id.LMX_DEF_LIB_EVENT_ID_REC_CTRL_RELEASE + 1,
+            LMX_DEF_LIB_TAG_REC_CTRL_RELEASE_RESRV = Lmx_event_id.LMX_DEF_LIB_EVENT_ID_REC_CTRL_RELEASE,       // 0x03000010
+            LMX_DEF_LIB_TAG_REC_CTRL_RELEASE_ONESHOT = Lmx_event_id.LMX_DEF_LIB_EVENT_ID_REC_CTRL_RELEASE + 1, // 0x03000011
+            // Bulb (continuous) sequence — reverse-engineered from the LUMIX Tether app (its cont_start/cont_end
+            // Rec_Ctrl_Release calls, captured via a logging proxy DLL). SS=BULB, then START (open shutter),
+            // hold, STOP (close), FINALIZE. The public SDK exposes only ONESHOT.
+            LMX_DEF_LIB_TAG_REC_CTRL_RELEASE_BULB_START = 0x03000012,
+            LMX_DEF_LIB_TAG_REC_CTRL_RELEASE_BULB_STOP = 0x03000013,
+            LMX_DEF_LIB_TAG_REC_CTRL_RELEASE_BULB_FINALIZE = 0x03000019,
             LMX_DEF_LIB_TAG_REC_CTRL_RELEASE_MAX
         }
 
