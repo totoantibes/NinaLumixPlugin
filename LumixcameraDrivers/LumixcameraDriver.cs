@@ -147,6 +147,7 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
         // ---- Extended-mode helpers: manual-mode whitelist + shutter-speed snapping ----
 
         private ushort _lastNotifiedModePos = 0xFFFF;
+        private bool _warnedJpeg = false;   // warn once per connect if the camera is capturing JPEG, not RAW
         private List<(double seconds, int raw)> _ssTable;
 
         private static bool IsManualMode(ushort modePos) =>
@@ -692,7 +693,16 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
                 // can display it even when its RAW converter can't decode this body's .RW2 (e.g. GH7, issue #1).
                 bool isJpeg = _lastFormat.IsEqual(Lmx_def_lib_object_format.LMX_DEF_OBJ_FORMAT_JPEG);
                 if (isJpeg) {
-                    Logger.Debug("Captured object is JPEG — decoding to image array for display.");
+                    // The camera captured a JPEG. If the user did NOT ask for JPEG, the body is set to a
+                    // JPEG quality (not RAW) — warn, because the frame will be shown in grayscale. In standard
+                    // mode the plugin cannot change the quality (Tether-only); the user must set RAW on the body.
+                    if (!Properties.Settings.Default.PreferJpeg && !_warnedJpeg) {
+                        _warnedJpeg = true;
+                        Notification.ShowWarning(NativeBinding.ExtendedMode
+                            ? "Camera captured JPEG, not RAW (shown in grayscale). Reconnect — the plugin sets RAW in extended mode."
+                            : "Camera captured JPEG, not RAW (shown in grayscale). Set the camera's image quality to RAW on the body — the plugin can't change it in standard mode.");
+                    }
+                    Logger.Info($"Captured object is JPEG (PreferJpeg={Properties.Settings.Default.PreferJpeg}) — decoding to grayscale for display.");
                     return DecodeJpegToExposure(buffer, metaData);
                 }
 
@@ -806,7 +816,7 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
                     ret = LMX_func_api_ISO_Get_Capability(ref Iso_CapaInfo, out retError);
                     // Rebuild the cached lists from THIS connection's fresh capability data (a reconnect reuses
                     // the driver, and stale/empty caches left gain unpopulated).
-                    _gains = null; _gainsRaw = null; _ssTable = null; _exposures = null;
+                    _gains = null; _gainsRaw = null; _ssTable = null; _exposures = null; _warnedJpeg = false;
 
                     // Warn (never block) about the exposure mode. Use the dedicated Get_Mode_Pos getter, not the
                     // CameraMode capability struct (whose Tether-buffer layout differs, so CurVal_mode_pos read
