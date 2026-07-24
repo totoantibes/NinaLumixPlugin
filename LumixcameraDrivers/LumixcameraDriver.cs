@@ -793,11 +793,13 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
                         _connected = true;
                     }
 
-                    // Extended: optionally force JPEG capture so NINA always gets a decodable image
-                    // (workaround for bodies whose .RW2 the RAW converter can't read, e.g. GH7 — issue #1).
-                    if (NativeBinding.ExtendedMode && Properties.Settings.Default.PreferJpeg) {
-                        LumixCam.Ext_SetImageQuality(LumixCam.IMGQ_JPEG_FINE, out retError);
-                        Logger.Info($"PreferJpeg: set still quality to JPEG (err={retError}).");
+                    // Extended: force JPEG capture (workaround for bodies whose .RW2 the RAW converter can't
+                    // read, e.g. GH7). When PreferJpeg is OFF, force RAW back — otherwise a camera left in JPEG
+                    // by a previous PreferJpeg session stays in JPEG and every frame comes back grayscale.
+                    if (NativeBinding.ExtendedMode) {
+                        uint q = Properties.Settings.Default.PreferJpeg ? LumixCam.IMGQ_JPEG_FINE : LumixCam.IMGQ_RAW;
+                        LumixCam.Ext_SetImageQuality(q, out retError);
+                        Logger.Info($"Image quality set to {(Properties.Settings.Default.PreferJpeg ? "JPEG" : "RAW")} (0x{q:X}, err={retError}).");
                     }
 
                     ret = LMX_func_api_SS_Get_Capability(ref SS_CapaInfo, out retError);

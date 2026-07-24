@@ -12,7 +12,7 @@
                 <CheckBox IsChecked="{Binding UseTetherExtended}" VerticalAlignment="Center" />
                 <TextBlock Margin="6,0,0,0" VerticalAlignment="Center">
                     <TextBlock.Text>Use LUMIX Tether extended features (BULB, RAW/JPG, battery, real camera state)</TextBlock.Text>
-                    <TextBlock.ToolTip>Requires Panasonic's free LUMIX Tether installed and CLOSED (it can't run at the same time as NINA). The plugin loads the DLL from your install — it is never bundled. Reconnect the camera after changing.</TextBlock.ToolTip>
+                    <TextBlock.ToolTip>Requires Panasonic's free LUMIX Tether installed and CLOSED (it can't run at the same time as NINA). The plugin loads the DLL from your install — it is never bundled. RESTART N.I.N.A. after changing this — the mode is chosen when the plugin loads, so a reconnect alone is not enough.</TextBlock.ToolTip>
                 </TextBlock>
             </StackPanel>
             <StackPanel Orientation="Horizontal" Margin="0,0,0,2">
