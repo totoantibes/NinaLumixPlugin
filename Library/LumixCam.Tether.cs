@@ -58,7 +58,7 @@ namespace LumixWrapper {
         [DllImport(DLLNAME, EntryPoint = "LMX_func_api_CloseSession", ExactSpelling = true, CallingConvention = cc)]
         private static extern byte Ext_CloseSession(IntPtr ctx, out uint retError);
         [DllImport(DLLNAME, EntryPoint = "LMX_func_api_CloseDevice", ExactSpelling = true, CallingConvention = cc)]
-        private static extern byte Ext_CloseDevice(out uint retError);
+        private static extern byte Ext_CloseDevice(IntPtr ctx, out uint retError);
 
         [DllImport(DLLNAME, EntryPoint = "LMX_func_api_SS_GetCapability", ExactSpelling = true, CallingConvention = cc)]
         private static extern byte Ext_SS_GetCapability(IntPtr capaBuf, IntPtr ctx, out uint retError);
@@ -235,12 +235,12 @@ namespace LumixWrapper {
 
         public static void Ext_Disconnect(out uint retError) {
             Ext_CloseSession(_tetherCtx, out retError);
-            Ext_CloseDevice(out retError);
+            Ext_CloseDevice(_tetherCtx, out retError);
         }
 
         // Split accessors so the driver can log/step through the teardown and see which call stalls/crashes.
         public static byte Ext_CloseSessionOnly(out uint retError) => Ext_CloseSession(_tetherCtx, out retError);
-        public static byte Ext_CloseDeviceOnly(out uint retError) => Ext_CloseDevice(out retError);
+        public static byte Ext_CloseDeviceOnly(out uint retError) => Ext_CloseDevice(_tetherCtx, out retError);
 
         /// <summary>Refresh the SS range so BULB (0xFFFFFFFF) sticks instead of clamping to 60s. Extended only.</summary>
         public static bool Ext_EnsureBulb(out uint retError) {
