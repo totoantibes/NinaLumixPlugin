@@ -919,8 +919,15 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
                             Logger.Info("[Lumix] Disconnect: restore SD target");
                             LumixCam.LMX_func_api_SetupFilesConfig_Set_Target(LumixCam.SAVE_TARGET_SD, out retError);
                         }
-                        Logger.Info("[Lumix] Disconnect: Ext_Disconnect");
-                        LumixCam.Ext_Disconnect(out retError);
+                        // Let any in-flight bulb close/finalize fully settle before tearing down the session,
+                        // then step through the close so the log shows which call (Session vs Device) stalls.
+                        try { bulbCompletionTask?.Wait(3000); } catch { }
+                        System.Threading.Thread.Sleep(400);
+                        Logger.Info("[Lumix] Disconnect: CloseSession");
+                        LumixCam.Ext_CloseSessionOnly(out retError);
+                        Logger.Info("[Lumix] Disconnect: CloseSession done; CloseDevice");
+                        LumixCam.Ext_CloseDeviceOnly(out retError);
+                        Logger.Info("[Lumix] Disconnect: CloseDevice done");
                     } else {
                         Logger.Info("[Lumix] Disconnect: Close_Session/Device");
                         LumixCam.LMX_func_api_Close_Session(out retError);

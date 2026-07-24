@@ -238,6 +238,10 @@ namespace LumixWrapper {
             Ext_CloseDevice(out retError);
         }
 
+        // Split accessors so the driver can log/step through the teardown and see which call stalls/crashes.
+        public static byte Ext_CloseSessionOnly(out uint retError) => Ext_CloseSession(_tetherCtx, out retError);
+        public static byte Ext_CloseDeviceOnly(out uint retError) => Ext_CloseDevice(out retError);
+
         /// <summary>Refresh the SS range so BULB (0xFFFFFFFF) sticks instead of clamping to 60s. Extended only.</summary>
         public static bool Ext_EnsureBulb(out uint retError) {
             EnsureTetherBuffers();
