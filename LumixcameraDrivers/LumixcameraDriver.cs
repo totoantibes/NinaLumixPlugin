@@ -402,21 +402,11 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
 
         public bool CanSetGain => CanGetGain;
 
-        public int GainMax {
-            get {
-                if (Connected) {
-                    return ((int)Iso_CapaInfo.Capa_Enum.SupportVal.Max());
-                } else { return 0; }
-            }
-        }
+        // Use the filtered Gains list (real ISO values, no Auto/i-ISO/Unknown sentinels) and guard the empty
+        // case, so these never return a garbage huge value nor throw when the ISO list is unavailable.
+        public int GainMax => (Connected && Gains != null && Gains.Count > 0) ? Gains.Max() : 0;
 
-        public int GainMin {
-            get {
-                if (Connected) {
-                    return ((int)Iso_CapaInfo.Capa_Enum.SupportVal.Min());
-                } else { return 0; }
-            }
-        }
+        public int GainMin => (Connected && Gains != null && Gains.Count > 0) ? Gains.Min() : 0;
 
         public int Gain {
             get {
@@ -804,6 +794,9 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
 
                     ret = LMX_func_api_SS_Get_Capability(ref SS_CapaInfo, out retError);
                     ret = LMX_func_api_ISO_Get_Capability(ref Iso_CapaInfo, out retError);
+                    // Rebuild the cached lists from THIS connection's fresh capability data (a reconnect reuses
+                    // the driver, and stale/empty caches left gain unpopulated).
+                    _gains = null; _ssTable = null; _exposures = null;
 
                     // Warn (never block) about the exposure mode. Use the dedicated Get_Mode_Pos getter, not the
                     // CameraMode capability struct (whose Tether-buffer layout differs, so CurVal_mode_pos read
@@ -887,7 +880,7 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
                 } catch (Exception ex) {
                     Logger.Error(ex);
                 }
-                Logger.Info($"[Lumix] Connected={_connected} ExtendedMode={NativeBinding.ExtendedMode} DLL='{NativeBinding.ActiveDllPath}' ExposureMin={ExposureMin:0.#####}s ExposureMax={ExposureMax:0}s");
+                Logger.Info($"[Lumix] Connected={_connected} ExtendedMode={NativeBinding.ExtendedMode} DLL='{NativeBinding.ActiveDllPath}' ExposureMin={ExposureMin:0.#####}s ExposureMax={ExposureMax:0}s Gain={Gain} GainMin={GainMin} GainMax={GainMax} Gains={Gains?.Count ?? 0}");
                 return _connected;
             });
         }
