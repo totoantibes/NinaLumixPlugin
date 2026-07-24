@@ -402,31 +402,26 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
 
         public bool CanSetGain => CanGetGain;
 
-        // Gains is a populated discrete list, so NINA treats Gain as an INDEX into it — min/max are the index
-        // bounds (0 .. count-1), not ISO values.
-        public int GainMax => (Connected && Gains != null && Gains.Count > 0) ? Gains.Count - 1 : 0;
+        // Value mode (matches NINA's own DSLR/ISO cameras): Gain is the ISO VALUE, Gains is the list of ISO
+        // values, GainMin/GainMax are the min/max ISO.
+        public int GainMax => (Connected && Gains != null && Gains.Count > 0) ? Gains.Max() : 0;
 
-        public int GainMin => 0;
+        public int GainMin => (Connected && Gains != null && Gains.Count > 0) ? Gains.Min() : 0;
 
-        // NINA/ASCOM convention: when Gains (a discrete list) is populated, Gain is the INDEX into it, not the
-        // raw ISO value. Map the camera's current ISO to its index for the getter, and the index back to the
-        // camera's original raw ISO value (which carries the extended-ISO markers) for the setter.
+        // Gain is the ISO VALUE (matches NINA's DSLR cameras). The setter maps the value back to the camera's
+        // original raw ISO (preserving extended-ISO markers) so it sends exactly what the camera reported.
         public int Gain {
             get {
-                _ = Gains; // ensure _gains/_gainsRaw are built
-                if (_gainsRaw != null) {
-                    uint cur = Iso_CapaInfo.CurVal;
-                    int idx = _gainsRaw.IndexOf(cur);
-                    if (idx < 0) { idx = _gains.IndexOf((int)(cur & 0x0FFFFFFF)); }
-                    if (idx >= 0) { return idx; }
-                }
-                return 0;
+                return (int)(Iso_CapaInfo.CurVal & 0x0FFFFFFF);
             }
             set {
                 _ = Gains;
-                if (_gainsRaw != null && value >= 0 && value < _gainsRaw.Count) {
-                    ret = LMX_func_api_ISO_Set_Param(_gainsRaw[value], out retError);
+                uint raw = (uint)value;
+                if (_gains != null && _gainsRaw != null) {
+                    int idx = _gains.IndexOf(value);
+                    if (idx >= 0) { raw = _gainsRaw[idx]; }
                 }
+                ret = LMX_func_api_ISO_Set_Param(raw, out retError);
             }
         }
 
