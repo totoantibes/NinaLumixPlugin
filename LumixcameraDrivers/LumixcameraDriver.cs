@@ -893,30 +893,39 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
         }
 
         public void Disconnect() {
-            if (Connected) {
+            if (!Connected) { return; }
+            Logger.Info("[Lumix] Disconnect: start");
+            try { bulbCompletionCTS?.Cancel(); } catch { }
+            // Run the native teardown on a worker with a timeout so a blocking SDK call can never freeze NINA.
+            // Each step is logged so the last line before a timeout pinpoints which call stalls.
+            var cleanup = Task.Run(() => {
                 try {
-                    returnV = LumixCam.LMX_func_api_Delete_CallBackInfo((uint)Lmx_event_id.LMX_DEF_LIB_EVENT_ID_OBJCT_ADD);
-                    returnV = LumixCam.LMX_func_api_Delete_CallBackInfo((uint)Lmx_event_id.LMX_DEF_LIB_EVENT_ID_OBJCT_REQ_TRNSFER);
-                    returnV = LumixCam.LMX_func_api_Delete_CallBackInfo((uint)Lmx_event_id.LMX_DEF_LIB_EVENT_ID_REC_CTRL_RELEASE);
-                    returnV = LumixCam.LMX_func_api_Delete_CallBackInfo((uint)Lmx_event_id.LMX_DEF_LIB_EVENT_ID_SHUTTER);
-                    returnV = LumixCam.LMX_func_api_Delete_CallBackInfo((uint)Lmx_event_id.LMX_DEF_LIB_EVENT_ID_ISO);
-
+                    Logger.Info("[Lumix] Disconnect: delete callbacks");
+                    LumixCam.LMX_func_api_Delete_CallBackInfo((uint)Lmx_event_id.LMX_DEF_LIB_EVENT_ID_OBJCT_ADD);
+                    LumixCam.LMX_func_api_Delete_CallBackInfo((uint)Lmx_event_id.LMX_DEF_LIB_EVENT_ID_OBJCT_REQ_TRNSFER);
+                    LumixCam.LMX_func_api_Delete_CallBackInfo((uint)Lmx_event_id.LMX_DEF_LIB_EVENT_ID_REC_CTRL_RELEASE);
+                    LumixCam.LMX_func_api_Delete_CallBackInfo((uint)Lmx_event_id.LMX_DEF_LIB_EVENT_ID_SHUTTER);
+                    LumixCam.LMX_func_api_Delete_CallBackInfo((uint)Lmx_event_id.LMX_DEF_LIB_EVENT_ID_ISO);
                     if (NativeBinding.ExtendedMode) {
-                        // Restore SD-only so we never leave the camera in cardless mode for other apps.
                         if (Properties.Settings.Default.SaveTarget != LumixCam.SAVE_TARGET_SD) {
+                            Logger.Info("[Lumix] Disconnect: restore SD target");
                             LumixCam.LMX_func_api_SetupFilesConfig_Set_Target(LumixCam.SAVE_TARGET_SD, out retError);
                         }
+                        Logger.Info("[Lumix] Disconnect: Ext_Disconnect");
                         LumixCam.Ext_Disconnect(out retError);
                     } else {
-                        ret = LumixCam.LMX_func_api_Close_Session(out retError);
-                        ret = LumixCam.LMX_func_api_Close_Device(out retError);//see if this make a difference
+                        Logger.Info("[Lumix] Disconnect: Close_Session/Device");
+                        LumixCam.LMX_func_api_Close_Session(out retError);
+                        LumixCam.LMX_func_api_Close_Device(out retError);
                     }
-                } catch (Exception ex) {
-                    Logger.Error(ex);
-                } finally {
-                    _connected = false;
-                }
+                    Logger.Info("[Lumix] Disconnect: native teardown done");
+                } catch (Exception ex) { Logger.Error("[Lumix] Disconnect teardown threw: " + ex); }
+            });
+            if (!cleanup.Wait(TimeSpan.FromSeconds(6))) {
+                Logger.Warning("[Lumix] Disconnect: native teardown timed out (6s) — continuing; an SDK call is stuck.");
             }
+            _connected = false;
+            Logger.Info("[Lumix] Disconnect: end");
         }
     }
 }
