@@ -440,27 +440,23 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
             get {
                 if (_gains == null) {
                     _gains = new List<int>();
-
-                    foreach (uint val in Iso_CapaInfo.Capa_Enum.SupportVal) {
-                        switch (val) {
-                            case ((uint)Lmx_def_lib_ISO_param.LMX_DEF_ISO_AUTO):
-                                //str = "0";// "Auto";
-                                //Gains.Add(0);
-                                break;
-
-                            case (uint)Lmx_def_lib_ISO_param.LMX_DEF_ISO_I_ISO:
-                                //str = "0";//"i-ISO";
-                                //Gains.Add(0);
-                                break;
-
-                            case (uint)Lmx_def_lib_ISO_param.LMX_DEF_ISO_UNKNOWN:
-                                //str = "0";// "Unknown";
-                                break;
-
-                            default:
-                                _gains.Add(((int)(val & 0x0FFFFFFF)));
-                                break;
+                    // Iterate only the valid entries (NumOfVal), not the fixed 512-slot array — the tail is
+                    // zeros and was flooding the gain list (also broke the old plugin). Skip the Auto/i-ISO/
+                    // Unknown sentinels and mask the extended-ISO markers to their value (e.g. 0x20019000 ->
+                    // 102400, 0x10000050 -> 80).
+                    var isoSupport = Iso_CapaInfo.Capa_Enum.SupportVal;
+                    if (isoSupport != null) {
+                        int isoCount = Iso_CapaInfo.Capa_Enum.NumOfVal;
+                        if (isoCount <= 0 || isoCount > isoSupport.Length) { isoCount = isoSupport.Length; }
+                        for (int i = 0; i < isoCount; i++) {
+                            uint val = (uint)isoSupport[i];
+                            if (val == (uint)Lmx_def_lib_ISO_param.LMX_DEF_ISO_AUTO) { continue; }
+                            if (val == (uint)Lmx_def_lib_ISO_param.LMX_DEF_ISO_I_ISO) { continue; }
+                            if (val == (uint)Lmx_def_lib_ISO_param.LMX_DEF_ISO_UNKNOWN) { continue; }
+                            int iso = (int)(val & 0x0FFFFFFF);
+                            if (iso > 0) { _gains.Add(iso); }
                         }
+                        ((List<int>)_gains).Sort();
                     }
                 }
 
