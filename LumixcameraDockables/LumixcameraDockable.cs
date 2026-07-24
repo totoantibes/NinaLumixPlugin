@@ -29,9 +29,12 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDockables {
             ITelescopeMediator telescopeMediator,
             INighttimeCalculator nighttimeCalculator) : base(profileService) {
 
-            // This will reference the resource dictionary to import the SVG graphic and assign it as the icon for the header bar
+            // This will reference the resource dictionary to import the SVG graphic and assign it as the icon for the header bar.
+            // The pack-URI authority before ";component" is the assembly SHORT NAME, so derive it at runtime from the
+            // executing assembly instead of hardcoding it — otherwise it breaks whenever AssemblyName changes.
+            var asmName = System.Reflection.Assembly.GetExecutingAssembly().GetName().Name;
             var dict = new ResourceDictionary();
-            dict.Source = new Uri("Roberthasson.NINA.Lumixcamera;component/LumixcameraDockables/LumixcameraDockableTemplates.xaml", UriKind.RelativeOrAbsolute);
+            dict.Source = new Uri(asmName + ";component/LumixcameraDockables/LumixcameraDockableTemplates.xaml", UriKind.RelativeOrAbsolute);
             ImageGeometry = (System.Windows.Media.GeometryGroup)dict["Roberthasson.NINA.Lumixcamera_AltitudeSVG"];
             ImageGeometry.Freeze();
 
