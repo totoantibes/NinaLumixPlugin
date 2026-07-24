@@ -1512,8 +1512,8 @@ namespace LumixWrapper {
         [DllImport(DLLNAME, ExactSpelling = true, CallingConvention = cc)]
         public static extern byte LMX_func_api_CameraMode_Get_DriveMode(out uint pulParam, out uint retError);
 
-        [DllImport(DLLNAME, ExactSpelling = true, CallingConvention = cc)]
-        public static extern byte LMX_func_api_CameraMode_Get_Mode_Pos(out uint pulParam, out uint retError);
+        [DllImport(DLLNAME, EntryPoint = "LMX_func_api_CameraMode_Get_Mode_Pos", ExactSpelling = true, CallingConvention = cc)]
+        private static extern byte Pub_CameraMode_Get_Mode_Pos(out uint pulParam, out uint retError);
 
         [DllImport(DLLNAME, ExactSpelling = true, CallingConvention = cc)]
         public static extern byte LMX_func_api_CameraMode_Get_CreativeMode(out uint pulParam, out uint retError);

@@ -76,6 +76,8 @@ namespace LumixWrapper {
 
         [DllImport(DLLNAME, EntryPoint = "LMX_func_api_CameraMode_GetCapability", ExactSpelling = true, CallingConvention = cc)]
         private static extern byte Ext_CameraMode_GetCapability(IntPtr capaBuf, IntPtr ctx, out uint retError);
+        [DllImport(DLLNAME, EntryPoint = "LMX_func_api_CameraMode_Get_Mode_Pos", ExactSpelling = true, CallingConvention = cc)]
+        private static extern byte Ext_CameraMode_GetModePos(out uint pulParam, IntPtr ctx, out uint retError);
 
         [DllImport(DLLNAME, EntryPoint = "LMX_func_api_Rec_Ctrl_Release", ExactSpelling = true, CallingConvention = cc)]
         private static extern byte Ext_Rec_Ctrl_Release(ref LMX_STRUCT_REC_CTRL lpRecCtrl, IntPtr ctx, out uint retError);
@@ -153,6 +155,11 @@ namespace LumixWrapper {
             pInfo = Marshal.PtrToStructure<LMX_STRUCT_ISO_CAPA_INFO>(_capBuf);
             return r;
         }
+        // Dedicated mode-position getter — avoids the CameraMode capability struct whose Tether-buffer layout
+        // differs from the managed struct (so reading CurVal_mode_pos from it gives the wrong value).
+        public static byte LMX_func_api_CameraMode_Get_Mode_Pos(out uint pulParam, out uint retError) =>
+            NativeBinding.ExtendedMode ? Ext_CameraMode_GetModePos(out pulParam, _tetherCtx, out retError) : Pub_CameraMode_Get_Mode_Pos(out pulParam, out retError);
+
         public static byte LMX_func_api_CameraMode_Get_Capability(ref LMX_STRUCT_RECINFO_CAMERA_MODE_CAPA_INFO pInfo, out uint retError) {
             if (!NativeBinding.ExtendedMode) return Pub_CameraMode_Get_Capability(ref pInfo, out retError);
             EnsureTetherBuffers();

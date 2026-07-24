@@ -123,15 +123,22 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
             uint dataSize;
             LMX_STRUCT_PTP_ARRAY_STRING fileNameArrStr = new LMX_STRUCT_PTP_ARRAY_STRING();
 
-            Logger.Debug("image added");
             LMX_func_api_Get_Object_FormatType(cb_event_param, out formatType, out retError);
             LMX_func_api_Get_Object_DataSize(cb_event_param, out dataSize, out retError);
             LMX_func_api_Get_Object_FileName(cb_event_param, ref fileNameArrStr, out retError);
             _lastFormat = formatType;
+            Logger.Info($"[LumixCapture] object=0x{cb_event_param:X} format=0x{formatType:X} size={dataSize}");
+            if (dataSize == 0) {
+                Logger.Warning("[LumixCapture] object data size is 0 — nothing to download.");
+                _downloadExposure.TrySetResult(null);
+                return;
+            }
             buffer = new byte[dataSize];
-            Logger.Debug($"Object added: format=0x{formatType:X} size={dataSize}");
-
-            try { LMX_func_api_Get_Object(cb_event_param, ref buffer[0], dataSize, out retError); } catch (Exception ex) { }
+            byte gr = 0;
+            try { gr = LMX_func_api_Get_Object(cb_event_param, ref buffer[0], dataSize, out retError); } catch (Exception ex) { Logger.Error("[LumixCapture] Get_Object threw: " + ex); }
+            if (dataSize >= 4) {
+                Logger.Info($"[LumixCapture] Get_Object ret={gr} err={retError}; magic={buffer[0]:X2} {buffer[1]:X2} {buffer[2]:X2} {buffer[3]:X2}");
+            }
 
             _downloadExposure.TrySetResult(null);
             return;
@@ -564,13 +571,15 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
                 // Re-check the exposure mode every capture so a mid-session dial change out of a manual mode is
                 // caught (the SDK exposes no mode-change push event, so we poll). Warn once per change to avoid
                 // spam. Runs on both DLLs; the Tether DLL additionally recognises the C1-C3 custom presets.
-                LMX_STRUCT_RECINFO_CAMERA_MODE_CAPA_INFO cmNow = new LMX_STRUCT_RECINFO_CAMERA_MODE_CAPA_INFO();
-                if (LMX_func_api_CameraMode_Get_Capability(ref cmNow, out uint cmErr) == LMX_BOOL_TRUE) {
-                    CheckExposureMode(cmNow.CurVal_mode_pos);
+                if (LMX_func_api_CameraMode_Get_Mode_Pos(out uint modePosNow, out uint cmErr) == LMX_BOOL_TRUE) {
+                    CheckExposureMode((ushort)modePosNow);
                 }
 
                 Logger.Debug("Prepare start of exposure: " + sequence);
-                _downloadExposure = new TaskCompletionSource<object>();
+                // RunContinuationsAsynchronously is essential: the completion (TrySetResult) happens on the
+                // native DLL callback thread, and without this NINA's continuation (LibRaw decode of the frame)
+                // would run inline on that native thread and hang the camera pipeline — badly for long bulb subs.
+                _downloadExposure = new TaskCompletionSource<object>(TaskCreationOptions.RunContinuationsAsynchronously);
                 if (_exposures == null) { _ = ExposureMin; }   // lazily build the discrete exposure list (was NRE on 1st shot)
 
                 // Extended mode: use BULB for ANY exposure longer than 1s so arbitrary / unlisted durations
@@ -594,13 +603,18 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
                     var bulbToken = bulbCompletionCTS.Token;
                     bulbCompletionTask = Task.Run(async () => {
                         try { await CoreUtil.Wait(TimeSpan.FromSeconds(exposureTime), bulbToken); } catch { }
-                        var bulbClose = new LMX_STRUCT_REC_CTRL { CtrlID = (uint)Lmx_TagID_Rec_Ctrl_Release.LMX_DEF_LIB_TAG_REC_CTRL_RELEASE_BULB_STOP };
-                        bulbClose.ParamData.NumOfVal = 0;
-                        LMX_func_api_Rec_Ctrl_Release(ref bulbClose, out uint ce);
-                        var bulbFin = new LMX_STRUCT_REC_CTRL { CtrlID = (uint)Lmx_TagID_Rec_Ctrl_Release.LMX_DEF_LIB_TAG_REC_CTRL_RELEASE_BULB_FINALIZE };
-                        bulbFin.ParamData.NumOfVal = 0;
-                        LMX_func_api_Rec_Ctrl_Release(ref bulbFin, out uint fe);
-                        Logger.Info($"[LumixBulb] close (0x13, err={ce}) + finalize (0x19, err={fe}) done.");
+                        try {
+                            var bulbClose = new LMX_STRUCT_REC_CTRL { CtrlID = (uint)Lmx_TagID_Rec_Ctrl_Release.LMX_DEF_LIB_TAG_REC_CTRL_RELEASE_BULB_STOP };
+                            bulbClose.ParamData.NumOfVal = 0;
+                            byte cr = LMX_func_api_Rec_Ctrl_Release(ref bulbClose, out uint ce);
+                            var bulbFin = new LMX_STRUCT_REC_CTRL { CtrlID = (uint)Lmx_TagID_Rec_Ctrl_Release.LMX_DEF_LIB_TAG_REC_CTRL_RELEASE_BULB_FINALIZE };
+                            bulbFin.ParamData.NumOfVal = 0;
+                            byte fr = LMX_func_api_Rec_Ctrl_Release(ref bulbFin, out uint fe);
+                            Logger.Info($"[LumixBulb] close (0x13 ret={cr} err={ce}) + finalize (0x19 ret={fr} err={fe}) done; awaiting image.");
+                        } catch (Exception bex) {
+                            Logger.Error("[LumixBulb] close/finalize threw: " + bex);
+                            try { _downloadExposure?.TrySetException(bex); } catch { }
+                        }
                     });
                     return;
                 }
@@ -790,15 +804,13 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
 
                     ret = LMX_func_api_SS_Get_Capability(ref SS_CapaInfo, out retError);
                     ret = LMX_func_api_ISO_Get_Capability(ref Iso_CapaInfo, out retError);
-                    ret = LMX_func_api_CameraMode_Get_Capability(ref CM_CapaInfo, out retError);
 
-                    if (!CM_CapaInfo.CurVal_mode_drive.IsEqual(Lmx_def_lib_Camera_Mode_Info_Drive_Mode.LMX_DEF_CAMERA_MODE_INFO_DRIVE_MODE_SINGLE)) {
-                        Notification.ShowWarning("Camera is not in Single Shot Mode. Best to change");
+                    // Warn (never block) about the exposure mode. Use the dedicated Get_Mode_Pos getter, not the
+                    // CameraMode capability struct (whose Tether-buffer layout differs, so CurVal_mode_pos read
+                    // wrong and falsely warned "not in M"). Only the Tether DLL reports C1-C3 positions.
+                    if (LMX_func_api_CameraMode_Get_Mode_Pos(out uint modePosConnect, out retError) == LMX_BOOL_TRUE) {
+                        CheckExposureMode((ushort)modePosConnect);
                     }
-                    // Warn (never block) about the exposure mode. Runs on both DLLs; only the Tether DLL reports
-                    // C-mode positions, so on the public DLL a C1-C3 preset reads as non-manual and gets the
-                    // stronger warning (the public SDK cannot drive C-modes anyway).
-                    CheckExposureMode(CM_CapaInfo.CurVal_mode_pos);
 
                     // Get current parameter values
                     ret = LumixCam.LMX_func_api_ISO_Get_Param(out _curIsoValue, out retError);
