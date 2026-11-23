@@ -208,6 +208,55 @@ namespace LumixWrapper {
         public static byte LMX_func_api_SetupFilesConfig_Set_Target(ushort unParam, out uint retError) =>
             NativeBinding.ExtendedMode ? Ext_SetupFilesConfig_SetTarget(unParam, _tetherCtx, out retError) : Pub_SetupFilesConfig_Set_Target(unParam, out retError);
 
+        // ===================== Card capacity (extended only) =====================
+        // The public SDK headers carry no storage call at all, but the Tether DLL exports several. Two are
+        // useful here: how many more frames the card holds, and the per-card status. Both are undocumented,
+        // so they are declared with the BUFFER shape (IntPtr, not `out uint`) and handed the 16 KB pinned
+        // scratch: if the real signature writes a struct rather than a single word, it cannot overrun
+        // anything. We then read the first 32-bit field. The first bytes of the buffer are returned as hex so
+        // the layout can be confirmed from a real log rather than assumed.
+        [DllImport(DLLNAME, EntryPoint = "LMX_func_api_GetFreeSpaceInImages", ExactSpelling = true, CallingConvention = cc)]
+        private static extern byte Ext_GetFreeSpaceInImages(IntPtr buf, IntPtr ctx, out uint retError);
+
+        [DllImport(DLLNAME, EntryPoint = "LMX_func_api_GetStatusOfCards", ExactSpelling = true, CallingConvention = cc)]
+        private static extern byte Ext_GetStatusOfCards(IntPtr buf, IntPtr ctx, out uint retError);
+
+        /// <summary>Frames the camera says still fit on the card, or false when it will not say (standard mode,
+        /// a body without the call, or a refused call). The number is advisory: report it, never gate a capture
+        /// on it.</summary>
+        public static bool Ext_TryGetFreeSpaceInImages(out uint images, out uint retError, out string rawHead) =>
+            TryReadStorageWord(StorageCall.FreeSpaceInImages, out images, out retError, out rawHead);
+
+        /// <summary>Per-card status word as the Tether DLL reports it. Layout is undocumented; the raw bytes
+        /// come back alongside so a log can pin it down.</summary>
+        public static bool Ext_TryGetStatusOfCards(out uint status, out uint retError, out string rawHead) =>
+            TryReadStorageWord(StorageCall.StatusOfCards, out status, out retError, out rawHead);
+
+        private enum StorageCall { FreeSpaceInImages, StatusOfCards }
+
+        private static bool TryReadStorageWord(StorageCall which, out uint value, out uint retError, out string rawHead) {
+            value = 0;
+            retError = 0;
+            rawHead = "";
+            if (!NativeBinding.ExtendedMode) { return false; }
+            try {
+                EnsureTetherBuffers();
+                if (_capBuf == IntPtr.Zero || _capBacking == null) { return false; }
+                Array.Clear(_capBacking, 0, STORAGE_SCRATCH_BYTES);
+                byte r = which == StorageCall.FreeSpaceInImages
+                    ? Ext_GetFreeSpaceInImages(_capBuf, _tetherCtx, out retError)
+                    : Ext_GetStatusOfCards(_capBuf, _tetherCtx, out retError);
+                rawHead = BitConverter.ToString(_capBacking, 0, STORAGE_SCRATCH_BYTES);
+                if (r != LMX_BOOL_TRUE) { return false; }
+                value = (uint)(_capBacking[0] | (_capBacking[1] << 8) | (_capBacking[2] << 16) | (_capBacking[3] << 24));
+                return true;
+            } catch (Exception) {
+                return false;   // an undocumented export that is absent or differently shaped must not be fatal
+            }
+        }
+
+        private const int STORAGE_SCRATCH_BYTES = 16;
+
         // ===================== Extended connection (raw buffers + held context) =====================
         /// <summary>Enumerate cameras via the extended DLL. Returns model names (index-aligned).</summary>
         public static string[] Ext_Enumerate(out uint retError) {

@@ -131,6 +131,64 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
 
         private Dictionary<string, CameraSpecs> lumixCameras;
 
+        // ---- Card capacity ----
+        // A full card is invisible from NINA's side: the camera just stops producing frames, and with the save
+        // target on PC+SD it produces an empty object instead. These two Tether exports are the only way to see
+        // it coming, so the count is read at connect and re-read after a frame arrives empty.
+        private uint? _lastKnownCardFreeFrames;
+        private bool _recheckCardCapacity;
+
+        // A flat set is 21 frames and a night of subs is hundreds, so fewer than this is worth saying out loud
+        // before the session starts rather than discovering at 3 a.m.
+        private const uint LOW_CARD_FRAMES = 50;
+
+        private static bool SaveTargetUsesCard(ushort saveTarget) =>
+            saveTarget == LumixCam.SAVE_TARGET_SD || saveTarget == LumixCam.SAVE_TARGET_PC_AND_SD;
+
+        // Frames the camera says still fit on the card, or null when it will not say. Both calls are
+        // undocumented Tether exports, so the raw bytes are logged either way: this line is what will pin their
+        // layout down on a real body, and it is also why they are only ever called from NINA's own thread —
+        // never from inside the SDK's capture callback.
+        private uint? ReadCardFreeFrames() {
+            bool ok = LumixCam.Ext_TryGetFreeSpaceInImages(out uint images, out uint spaceErr, out string spaceRaw);
+            LumixCam.Ext_TryGetStatusOfCards(out uint status, out uint statusErr, out string statusRaw);
+            if (!ok) {
+                Logger.Info($"[LumixCard] the camera did not report card capacity (err={spaceErr}, bytes={spaceRaw}; status err={statusErr}, bytes={statusRaw}).");
+                _lastKnownCardFreeFrames = null;
+                return null;
+            }
+            Logger.Info($"[LumixCard] room for {images} more frame(s); card status=0x{status:X} (space bytes={spaceRaw}, status bytes={statusRaw}).");
+            _lastKnownCardFreeFrames = images;
+            return images;
+        }
+
+        // Read the card and say so where NINA shows it. Only warns when the save target actually writes to the
+        // card — on PC-only the card's state does not matter.
+        private void ReportCardCapacity(ushort saveTarget) {
+            uint? free = ReadCardFreeFrames();
+            if (free == null || !SaveTargetUsesCard(saveTarget)) { return; }
+            if (free.Value == 0) {
+                Logger.Error("[LumixCard] the SD card is full and the save target writes to it — captures will fail until the card is cleared or the save target is set to PC only.");
+                Notification.ShowError("The camera's SD card is full and the save target writes to it. Clear the card, or set the plugin's save target to PC only.");
+            } else if (free.Value < LOW_CARD_FRAMES) {
+                Logger.Warning($"[LumixCard] only {free.Value} frame(s) of room left on the SD card.");
+                Notification.ShowWarning($"The camera's SD card has room for only {free.Value} more frame(s).");
+            }
+        }
+
+        // What to tell NINA about the card when a frame arrives empty. Uses the last reading rather than calling
+        // the SDK from the capture callback, and asks for a fresh reading on the next exposure.
+        private string DescribeCardForFailure() {
+            _recheckCardCapacity = true;
+            if (_lastKnownCardFreeFrames == 0) {
+                return " The SD card was last reported full.";
+            }
+            if (_lastKnownCardFreeFrames.HasValue) {
+                return $" The SD card was last reported as having room for {_lastKnownCardFreeFrames.Value} frame(s).";
+            }
+            return " If the save target includes the SD card, check that the card is not full.";
+        }
+
         // Fail the exposure NINA is awaiting, so a frame that cannot be delivered ends as a failed capture.
         // TrySetException, never TrySetResult: completing the task successfully hands NINA an exposure whose
         // raw bytes are null, because `buffer` was cleared by the previous frame's download.
@@ -167,7 +225,7 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
                 // data — which handed NINA an exposure whose raw bytes were null. Fail the frame instead.
                 Logger.Warning("[LumixCapture] object data size is 0 — nothing to download; failing this frame. If the save target includes the SD card, check that the card is not full.");
                 ReleasePendingTransfer(cb_event_param);
-                FailExposure("The camera reported a frame with no data. If the save target includes the SD card, check that the card is not full.");
+                FailExposure("The camera reported a frame with no data." + DescribeCardForFailure());
                 return;
             }
             if (dataSize > MAX_OBJECT_BYTES) {
@@ -622,6 +680,12 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
 
         public void StartExposure(CaptureSequence sequence) {
             if (Connected) {
+                if (_recheckCardCapacity) {
+                    // The previous frame came back empty. Re-read the card here, on NINA's thread, so the next
+                    // failure message carries a current number instead of the one from connect.
+                    _recheckCardCapacity = false;
+                    ReportCardCapacity((ushort)Properties.Settings.Default.SaveTarget);
+                }
                 if (_downloadExposure != null && _downloadExposure.Task.Status <= TaskStatus.Running) {
                     Notification.ShowWarning("Another exposure still in progress. Cancelling it to start another.");
                     Logger.Warning("An exposure was still in progress. Cancelling it to start another.");
@@ -912,6 +976,7 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
                         ushort saveTgt = (ushort)Properties.Settings.Default.SaveTarget;
                         LumixCam.LMX_func_api_SetupFilesConfig_Set_Target(saveTgt, out retError);
                         Logger.Info($"Save target set to {saveTgt} (0=SD,1=PC,2=PC+SD), err={retError}.");
+                        ReportCardCapacity(saveTgt);
                     }
 
                     lumixCameras = new Dictionary<string, CameraSpecs>
