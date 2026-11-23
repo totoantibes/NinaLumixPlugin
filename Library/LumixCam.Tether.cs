@@ -242,13 +242,16 @@ namespace LumixWrapper {
         //
         // That hex is what settled the layouts, measured on a DC-BGH1 in extended mode on 2026-11-23:
         //
-        //   GetFreeSpaceInImages  FF-FF-FF-FF 00-00-00-00 ...   a single word, 0xFFFFFFFF meaning "no number"
-        //   GetStatusOfCards      02-00-00-00 00-00-00-00 ...   a single word, 0x2
+        //   GetBatteryInfo        11-00-00-16 08-00-00-00 64-00-00-00 64-00-FF-FF   then all zero
         //
-        // Those two were read with NO CARD in the body (and the save target on PC), so that pair is the
-        // card-absent state. Whether a card that is present but full reads the same way is still unmeasured.
-        //   GetBatteryInfo        11-00-00-16 08-00-00-00 64-00-00-00 64-00-FF-FF
+        // The card calls were then read twice with the save target unchanged on PC only, once with the slot
+        // empty and once with a card in it:
         //
+        //   slot empty   free FF-FF-FF-FF (0xFFFFFFFF)   status 02-00-00-00 (0x00000002)
+        //   card in      free 10-0A-00-00 (2576)         status 02-00-01-00 (0x00010002)
+        //
+        // So the body reports capacity whatever the save target is, 0xFFFFFFFF means no card rather than a
+        // refusal, and in the status word the high 16 bits carry card presence while the low 16 were 2 in both.
         // So the battery call is NOT a single word: its first 32 bits are 0x16000011, which is not a level.
         // 0x64 = 100 - the level of the dummy battery in the body - appears twice, as a uint32 at offset 8 and
         // as a uint16 at offset 12, with 8 at offset 4 looking like a size or count. Offset 8 is read as the
@@ -266,9 +269,15 @@ namespace LumixWrapper {
         public static bool Ext_TryGetFreeSpaceInImages(out uint images, out uint retError, out string rawHead) =>
             TryReadTetherWord(TetherWord.FreeSpaceInImages, out images, out retError, out rawHead);
 
-        /// <summary>What the body returns from GetFreeSpaceInImages instead of a count. Measured with no card in
-        /// the body; whether a card that is present but full reports it too is not yet known.</summary>
+        /// <summary>What the body returns from GetFreeSpaceInImages instead of a count. Measured as the
+        /// card-absent reading; whether a card that is present but full reports it too is not yet known.</summary>
         public const uint CARD_FRAMES_NO_NUMBER = uint.MaxValue;
+
+        /// <summary>Whether the status word says a card is in the slot: 0x00000002 with the slot empty and
+        /// 0x00010002 with a card in it, so presence rides in the high 16 bits. Two samples only — a locked or
+        /// unreadable card may well read differently, so callers must still handle "a card is there but the
+        /// camera gives no usable capacity".</summary>
+        public static bool CardPresent(uint statusWord) => (statusWord >> 16) != 0;
 
         /// <summary>Per-card status word as the Tether DLL reports it. Layout is undocumented; the raw bytes
         /// come back alongside so a log can pin it down.</summary>

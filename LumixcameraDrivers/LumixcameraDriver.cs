@@ -136,6 +136,7 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
         // target on PC+SD it produces an empty object instead. These two Tether exports are the only way to see
         // it coming, so the count is read at connect and re-read after a frame arrives empty.
         private uint? _lastKnownCardFreeFrames;
+        private uint? _lastKnownCardStatus;
         private bool _recheckCardCapacity;
 
         // A flat set is 21 frames and a night of subs is hundreds, so fewer than this is worth saying out loud
@@ -149,14 +150,15 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
         // undocumented Tether exports, so the raw bytes are logged either way: this line is what will pin their
         // layout down on a real body, and it is also why they are only ever called from NINA's own thread —
         // never from inside the SDK's capture callback.
-        // No SD card holds this many frames, so a bigger number is not a count. Measured: with the save target
-        // on PC only the body answers 0xFFFFFFFF, which read as "room for 4294967295 more frame(s)" until this
-        // check existed.
+        // No SD card holds this many frames, so a bigger number is not a count. Measured: with the slot empty
+        // the body answers 0xFFFFFFFF, which read as "room for 4294967295 more frame(s)" until this check
+        // existed. With a card in, the same call returned 2576 — a real count, whatever the save target.
         private const uint CARD_FRAMES_IMPLAUSIBLE = 1000000;
 
         private uint? ReadCardFreeFrames() {
             bool ok = LumixCam.Ext_TryGetFreeSpaceInImages(out uint images, out uint spaceErr, out string spaceRaw);
-            LumixCam.Ext_TryGetStatusOfCards(out uint status, out uint statusErr, out string statusRaw);
+            bool statusOk = LumixCam.Ext_TryGetStatusOfCards(out uint status, out uint statusErr, out string statusRaw);
+            _lastKnownCardStatus = statusOk ? status : (uint?)null;
             if (!ok) {
                 Logger.Info($"[LumixCard] the camera did not report card capacity (err={spaceErr}, bytes={spaceRaw}; status err={statusErr}, bytes={statusRaw}).");
                 _lastKnownCardFreeFrames = null;
@@ -178,13 +180,16 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
             uint? free = ReadCardFreeFrames();
             if (!SaveTargetUsesCard(saveTarget)) { return; }
             if (free == null) {
-                // No usable count AND the save target writes to the card. This is the dangerous combination,
-                // not a reason to stay quiet: the camera has somewhere it is meant to write and cannot tell us
-                // there is room. An absent card reads this way — 0xFFFFFFFF free with status 0x2, measured on a
-                // body with no card in it — and so, as far as we know, does a body that simply does not report
-                // capacity. Both deserve the same warning, because both end in frames that never arrive.
-                Logger.Warning("[LumixCard] the save target writes to the SD card, but the camera reports no usable card capacity — if the body has no card, or a card it cannot write to, captures will fail.");
-                Notification.ShowWarning("The save target writes to the camera's SD card, but the camera reports no usable card capacity. Check that a card is present and writable, or set the plugin's save target to PC only.");
+                // No usable count AND the save target writes to the card: the camera has somewhere it is meant
+                // to write and cannot tell us there is room. The status word separates the two causes — an empty
+                // slot reads 0x00000002 and a card in the slot 0x00010002 — so name which one it is, falling
+                // back to the vaguer wording when the status word is missing or in some third state.
+                bool slotEmpty = _lastKnownCardStatus.HasValue && !LumixCam.CardPresent(_lastKnownCardStatus.Value);
+                string reason = slotEmpty
+                    ? "there is no card in the camera"
+                    : "the camera reports no usable capacity for the card";
+                Logger.Warning($"[LumixCard] the save target writes to the SD card, but {reason} — captures will fail until a writable card is in the body or the save target is set to PC only.");
+                Notification.ShowWarning($"The save target writes to the camera's SD card, but {reason}. Put in a writable card, or set the plugin's save target to PC only.");
                 return;
             }
             if (free.Value == 0) {
