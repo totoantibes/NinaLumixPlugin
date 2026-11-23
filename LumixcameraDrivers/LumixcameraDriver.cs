@@ -46,20 +46,15 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
         private uint _index;
         private uint _curIsoValue = 0;
         private int _curSsValue = 0;
-        private bool bulbFound = false;
         private bool _connected = false;
         private byte[] buffer;
         private uint _lastFormat;   // object format of the most recent capture (RAW vs JPEG) for download decode
         private AsyncObservableCollection<BinningMode> _binningModes;
 
-        private TaskCompletionSource<bool> _cameraConnected;
-        private MemoryStream _memoryStream;
         private LMX_CALLBACK_FUNC callback;
 
         private LMX_STRUCT_ISO_CAPA_INFO Iso_CapaInfo = new LMX_STRUCT_ISO_CAPA_INFO();
         private LMX_STRUCT_SS_CAPA_INFO SS_CapaInfo = new LMX_STRUCT_SS_CAPA_INFO();
-        private LMX_STRUCT_RECINFO_CAMERA_MODE_CAPA_INFO CM_CapaInfo = new LMX_STRUCT_RECINFO_CAMERA_MODE_CAPA_INFO();
-        private int _prevShutterSpeed;
         private TaskCompletionSource<object> _downloadExposure;
         private CameraSpecs _currentCameraspecs = new CameraSpecs();
 
@@ -72,7 +67,28 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
             callback = new LMX_CALLBACK_FUNC(NotifyCallbackFunction);
         }
 
+        // Largest object we will accept as a still frame. The biggest Lumix RW2 is well under this (18 MB on
+        // the bodies used here, under 100 MB on the highest-resolution ones); a size beyond it is a garbage or
+        // uninitialised out-param from an object the camera cannot serve, not a photograph.
+        private const uint MAX_OBJECT_BYTES = 256u * 1024u * 1024u;
+
+        // The native SDK calls this from its own thread: it is a reverse P/Invoke, so a managed exception must
+        // NEVER leave this method. Unwinding into the SDK's native frame is undefined behaviour and takes the
+        // whole NINA process down — Windows reports it as an access violation in the C runtime, with no managed
+        // exception text and the log cut off mid-frame (observed 2026-11-23 08:32:57, caused by a full SD card).
+        // Catch everything here, fail the frame NINA is waiting on, and let the capture be the casualty instead
+        // of the process.
         public int NotifyCallbackFunction(uint cb_event_type, uint cb_event_param) {
+            try {
+                return DispatchCallbackEvent(cb_event_type, cb_event_param);
+            } catch (Exception ex) {
+                Logger.Error($"[LumixCapture] handling camera event 0x{cb_event_type:X} (param 0x{cb_event_param:X}) threw; failing this frame: {ex}");
+                FailExposure($"The Lumix driver failed while handling camera event 0x{cb_event_type:X}: {ex.Message}");
+                return 0;   // event consumed — never let an exception reach native code
+            }
+        }
+
+        private int DispatchCallbackEvent(uint cb_event_type, uint cb_event_param) {
             switch ((Lmx_event_id)cb_event_type) {
                 case Lmx_event_id.LMX_DEF_LIB_EVENT_ID_REC_CTRL_RELEASE:
                     ExposureFinished(cb_event_param);
@@ -87,7 +103,7 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
                     if (_downloadExposure != null && !_downloadExposure.Task.IsCompleted) {
                         ExposureFinished(cb_event_param);
                     } else {
-                        LMX_func_api_Skip_Object_Transfer(cb_event_param, out uint _skipErr);
+                        ReleasePendingTransfer(cb_event_param);
                     }
                     break;
 
@@ -115,6 +131,22 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
 
         private Dictionary<string, CameraSpecs> lumixCameras;
 
+        // Fail the exposure NINA is awaiting, so a frame that cannot be delivered ends as a failed capture.
+        // TrySetException, never TrySetResult: completing the task successfully hands NINA an exposure whose
+        // raw bytes are null, because `buffer` was cleared by the previous frame's download.
+        private void FailExposure(string reason) {
+            var tcs = _downloadExposure;
+            if (tcs == null || tcs.Task.IsCompleted) { return; }
+            tcs.TrySetException(new Exception(reason));
+        }
+
+        // A cardless PC-transfer request must be consumed — pulled or skipped — or the camera keeps a pending
+        // write and will not power off. Card objects (OBJCT_ADD) carry no pending transfer to release.
+        private void ReleasePendingTransfer(uint cb_event_param) {
+            if (cb_event_param != CARDLESS_TRNSFER_HDL) { return; }
+            LMX_func_api_Skip_Object_Transfer(cb_event_param, out uint _skipErr);
+        }
+
         private void ExposureFinished(uint cb_event_param) {
             // With PC+SD, one frame fires both OBJCT_REQ_TRNSFER (cardless handle) and OBJCT_ADD (card handle);
             // process only the first so we don't download twice.
@@ -129,8 +161,21 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
             _lastFormat = formatType;
             Logger.Info($"[LumixCapture] object=0x{cb_event_param:X} format=0x{formatType:X} size={dataSize}");
             if (dataSize == 0) {
-                Logger.Warning("[LumixCapture] object data size is 0 — nothing to download.");
-                _downloadExposure.TrySetResult(null);
+                // The camera raised a transfer event for an object that holds no data. Seen when the SD card is
+                // full and the save target includes SD: the card write has nowhere to go, so the frame never
+                // exists. This used to call TrySetResult(null) — completing the exposure as a SUCCESS with no
+                // data — which handed NINA an exposure whose raw bytes were null. Fail the frame instead.
+                Logger.Warning("[LumixCapture] object data size is 0 — nothing to download; failing this frame. If the save target includes the SD card, check that the card is not full.");
+                ReleasePendingTransfer(cb_event_param);
+                FailExposure("The camera reported a frame with no data. If the save target includes the SD card, check that the card is not full.");
+                return;
+            }
+            if (dataSize > MAX_OBJECT_BYTES) {
+                // Allocating a garbage size would throw OutOfMemory inside this native callback — the one place
+                // an exception must not be raised. Refuse the object instead of trying to hold it.
+                Logger.Warning($"[LumixCapture] object size {dataSize} exceeds the {MAX_OBJECT_BYTES} byte limit for a still frame — refusing to allocate; failing this frame.");
+                ReleasePendingTransfer(cb_event_param);
+                FailExposure($"The camera reported an implausible frame size of {dataSize} bytes.");
                 return;
             }
             buffer = new byte[dataSize];
@@ -147,10 +192,7 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
             // and keep awaiting the real frame — the valid RW2/JPEG arrives on the next OBJCT event.
             if (gr != LMX_BOOL_TRUE || !IsKnownImageHeader(buffer, dataSize)) {
                 Logger.Warning($"[LumixCapture] object 0x{cb_event_param:X} is not a usable image (ret={gr}, format=0x{formatType:X}, size={dataSize}) — ignoring, waiting for the real frame.");
-                // A cardless PC-transfer request must still be released or the camera keeps a pending write and won't power off.
-                if (cb_event_param == CARDLESS_TRNSFER_HDL) {
-                    LMX_func_api_Skip_Object_Transfer(cb_event_param, out uint _skipErr);
-                }
+                ReleasePendingTransfer(cb_event_param);
                 return;   // do NOT complete the exposure with junk data
             }
 
