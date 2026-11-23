@@ -527,6 +527,13 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
         public int BatteryLevel {
             get {
                 if (!Connected || !NativeBinding.ExtendedMode) { return -1; }
+                // Never read the battery while live view is streaming. NINA calls metaData.FromCamera(this) for
+                // every live-view frame, so this getter sits in that loop, and before this property did any work
+                // it was a hardcoded 100 — no native call at all. On 2026-11-23 at 16:15:33 a refresh that fell
+                // due mid-live-view came back having written nothing, the next live-view poll produced no frame,
+                // and the process died 1.1 s later. Cause unproven, but a property read competing with the
+                // live-view stream has no business being in that path: serve the cached value instead.
+                if (LiveViewEnabled) { return _batteryPercent; }
                 if ((DateTime.UtcNow - _batteryReadAt).TotalSeconds < BATTERY_CACHE_SECONDS) { return _batteryPercent; }
                 _batteryReadAt = DateTime.UtcNow;
                 _batteryPercent = ReadBatteryPercent();
@@ -945,18 +952,38 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
             LiveViewEnabled = true;
         }
 
+        // How long to wait before asking the camera for a live-view frame again when it had none ready. NINA's
+        // live-view loop has no delay of its own, so without this the poll is a spin.
+        private const int LIVEVIEW_EMPTY_POLL_WAIT_MS = 20;
+
         public Task<IExposureData> DownloadLiveView(CancellationToken token) {
             return Task.Run<IExposureData>(() => {
-                // liveview structures
-                uint returnedJpegSize;
+                // The camera does not always have a frame ready, and `returnedJpegSize` — written by the SDK on
+                // every call — was never read, here or in the grayscale path this replaced. The whole fixed-size
+                // buffer went to the JPEG decoder, so an empty poll meant decoding a zero-filled array: that
+                // throws WINCODEC_ERR_COMPONENTNOTFOUND, and because NINA's loop has no catch of its own the
+                // exception ended live view (observed 2026-11-23 16:15:33). Poll until a frame actually arrives.
                 byte[] jpegDataPos = new byte[LMX_DEF_LIVEVIEW_STREAMDATA_SIZE_MAX];
-                LMX_STRUCT_LIVEVIEW_INFO_HISTGRAM histgramBuf = new LMX_STRUCT_LIVEVIEW_INFO_HISTGRAM();
-                uint histgramBufSize = LMX_DEF_LIVEVIEW_HISTGRAM_ELEMENT_SIZE;
-                LMX_STRUCT_LIVEVIEW_INFO_POSTURE postureBuf = new LMX_STRUCT_LIVEVIEW_INFO_POSTURE();
-                uint postureBufSize = 32;
-                LMX_STRUCT_LIVEVIEW_INFO_LEVEL levelBuf = new LMX_STRUCT_LIVEVIEW_INFO_LEVEL();
-                uint levelBufSize = 32;// sizeof(LMX_STRUCT_LIVEVIEW_INFO_LEVEL);
-                LMX_func_api_Get_LiveView_data(ref histgramBuf, out histgramBufSize, ref postureBuf, out postureBufSize, ref levelBuf, out levelBufSize, ref jpegDataPos[0], out returnedJpegSize, out retError);
+                uint returnedJpegSize;
+                while (true) {
+                    token.ThrowIfCancellationRequested();
+                    LMX_STRUCT_LIVEVIEW_INFO_HISTGRAM histgramBuf = new LMX_STRUCT_LIVEVIEW_INFO_HISTGRAM();
+                    uint histgramBufSize = LMX_DEF_LIVEVIEW_HISTGRAM_ELEMENT_SIZE;
+                    LMX_STRUCT_LIVEVIEW_INFO_POSTURE postureBuf = new LMX_STRUCT_LIVEVIEW_INFO_POSTURE();
+                    uint postureBufSize = 32;
+                    LMX_STRUCT_LIVEVIEW_INFO_LEVEL levelBuf = new LMX_STRUCT_LIVEVIEW_INFO_LEVEL();
+                    uint levelBufSize = 32;// sizeof(LMX_STRUCT_LIVEVIEW_INFO_LEVEL);
+                    byte r = LMX_func_api_Get_LiveView_data(ref histgramBuf, out histgramBufSize, ref postureBuf, out postureBufSize, ref levelBuf, out levelBufSize, ref jpegDataPos[0], out returnedJpegSize, out retError);
+                    if (r == LMX_BOOL_TRUE && returnedJpegSize > 4 && returnedJpegSize <= jpegDataPos.Length
+                        && jpegDataPos[0] == 0xFF && jpegDataPos[1] == 0xD8 && jpegDataPos[2] == 0xFF) {
+                        break;
+                    }
+                    System.Threading.Thread.Sleep(LIVEVIEW_EMPTY_POLL_WAIT_MS);
+                }
+
+                // Trim to the bytes the camera actually wrote; the rest of the buffer is stale or zero.
+                byte[] frame = new byte[returnedJpegSize];
+                Array.Copy(jpegDataPos, frame, (int)returnedJpegSize);
 
                 var metaData = new ImageMetaData();
                 metaData.FromCamera(this);
@@ -964,7 +991,7 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
                 // single-plane Bayer (RGGB) array and hand it to NINA as isBayered so NINA's own
                 // debayer step (the same one used for real captures) produces a colour preview,
                 // instead of flattening the frame to Gray16 as before.
-                return DecodeJpegToBayerExposure(jpegDataPos, metaData);
+                return DecodeJpegToBayerExposure(frame, metaData);
             });
         }
 
