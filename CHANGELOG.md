@@ -31,6 +31,11 @@
   and drop the hardcoded runner path.
 - Build: the post-build copy to the local N.I.N.A. plugin folder only runs on Windows, so the project
   also builds on Linux/CI with `EnableWindowsTargeting`.
+
+Colour live view, the optional built-in LibRaw decoder, the sensor-table corrections and the
+release-workflow fixes in this release are the work of [flexo-112](https://github.com/flexo-112),
+contributed in [#2](https://github.com/totoantibes/NinaLumixPlugin/pull/2). Thank you.
+
 ## 1.2.0.0
 - Optional **LUMIX Tether extended mode**: when enabled in the plugin options the driver
   loads the DLL from a local install of Panasonic's free LUMIX Tether application (never
