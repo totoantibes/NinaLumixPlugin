@@ -29,6 +29,41 @@ namespace LumixWrapper {
         private static GCHandle _devPin;
         private static IntPtr _devBuf = IntPtr.Zero;    // extended device-info buffer (array-max 64 layout)
 
+        // ---- object-transfer buffer ----
+        // The SDK writes into buffers AFTER the call that supplied them has returned: on 2026-11-23 at
+        // 16:15:34 Lmxptpif's own thread faulted in memcpy writing a 23,881-byte frame into a 1.4 MB region
+        // that was already MEM_FREE / PAGE_NOACCESS. So an object transfer must never be given a fresh managed
+        // array by `ref`: that array is pinned only for the duration of the call and is collectible the moment
+        // the download completes. It gets the same treatment as the context and capability buffers above -
+        // allocated once, pinned, and alive for the life of the process.
+        //
+        // Growing it does NOT free the old one. A buffer the SDK may still hold a pointer to must stay valid
+        // forever, so retired handles are parked in _retiredObjPins and deliberately leaked. In practice this
+        // holds one buffer per distinct frame size, which is one per body.
+        private static byte[] _objBacking;
+        private static GCHandle _objPin;
+        private static readonly System.Collections.Generic.List<GCHandle> _retiredObjPins = new System.Collections.Generic.List<GCHandle>();
+
+        /// <summary>The pinned object-transfer buffer, at least <paramref name="bytes"/> long. false if it
+        /// could not be sized. The array is handed back so a caller can inspect the header without copying,
+        /// but it MUST NOT be passed to anything that outlives the next transfer - the next frame overwrites
+        /// it. Copy out what needs to live longer.</summary>
+        public static bool TryGetObjectBuffer(uint bytes, out byte[] buf) {
+            buf = null;
+            if (bytes == 0) { return false; }
+            try {
+                if (_objBacking == null || _objBacking.Length < bytes) {
+                    if (_objPin.IsAllocated) { _retiredObjPins.Add(_objPin); }   // leaked on purpose; see above
+                    _objBacking = new byte[bytes];
+                    _objPin = GCHandle.Alloc(_objBacking, GCHandleType.Pinned);
+                }
+                buf = _objBacking;
+                return true;
+            } catch (Exception) {
+                return false;   // an allocation failure must not throw out of the SDK's callback thread
+            }
+        }
+
         private static void EnsureTetherBuffers() {
             if (_tetherCtx == IntPtr.Zero) {
                 _ctxBacking = new byte[8192]; _ctxPin = GCHandle.Alloc(_ctxBacking, GCHandleType.Pinned);

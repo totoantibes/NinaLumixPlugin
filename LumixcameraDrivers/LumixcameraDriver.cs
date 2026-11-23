@@ -261,11 +261,20 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
                 FailExposure($"The camera reported an implausible frame size of {dataSize} bytes.");
                 return;
             }
-            buffer = new byte[dataSize];
+            // Transfer into the session-lived pinned buffer, never into a fresh managed array. `ref array[0]`
+            // pins only for the duration of the call, and this SDK writes to buffers after the call returns —
+            // see TryGetObjectBuffer for the evidence. A collectible destination here would be the capture-path
+            // twin of the live-view use-after-free.
+            if (!LumixCam.TryGetObjectBuffer(dataSize, out byte[] xfer)) {
+                Logger.Warning($"[LumixCapture] could not obtain a {dataSize}-byte transfer buffer; failing this frame.");
+                ReleasePendingTransfer(cb_event_param);
+                FailExposure($"Could not allocate a {dataSize}-byte buffer for the frame.");
+                return;
+            }
             byte gr = 0;
-            try { gr = LMX_func_api_Get_Object(cb_event_param, ref buffer[0], dataSize, out retError); } catch (Exception ex) { Logger.Error("[LumixCapture] Get_Object threw: " + ex); }
+            try { gr = LMX_func_api_Get_Object(cb_event_param, ref xfer[0], dataSize, out retError); } catch (Exception ex) { Logger.Error("[LumixCapture] Get_Object threw: " + ex); }
             if (dataSize >= 4) {
-                Logger.Info($"[LumixCapture] Get_Object ret={gr} err={retError}; magic={buffer[0]:X2} {buffer[1]:X2} {buffer[2]:X2} {buffer[3]:X2}");
+                Logger.Info($"[LumixCapture] Get_Object ret={gr} err={retError}; magic={xfer[0]:X2} {xfer[1]:X2} {xfer[2]:X2} {xfer[3]:X2}");
             }
 
             // Guard against a bogus object. On the first frame of a session the camera can fire an OBJCT event
@@ -273,11 +282,19 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
             // (observed as format 0x3, 128 KB). Forwarding that to NINA makes LibRaw throw "not a RAW file". Only
             // complete the download once we've actually pulled a recognisable image; otherwise ignore this object
             // and keep awaiting the real frame — the valid RW2/JPEG arrives on the next OBJCT event.
-            if (gr != LMX_BOOL_TRUE || !IsKnownImageHeader(buffer, dataSize)) {
+            if (gr != LMX_BOOL_TRUE || !IsKnownImageHeader(xfer, dataSize)) {
                 Logger.Warning($"[LumixCapture] object 0x{cb_event_param:X} is not a usable image (ret={gr}, format=0x{formatType:X}, size={dataSize}) — ignoring, waiting for the real frame.");
                 ReleasePendingTransfer(cb_event_param);
                 return;   // do NOT complete the exposure with junk data
             }
+
+            // Only now that the frame is known good, copy it out of the shared transfer buffer. NINA keeps these
+            // bytes well past this method — it decodes them and writes the .RW2 from them on its own threads —
+            // so it cannot be handed the buffer itself: the next frame would overwrite it mid-save. The copy is
+            // a few milliseconds against a download of a few hundred, and the array it produces is never seen
+            // by native code, so it is free to move or be collected.
+            buffer = new byte[dataSize];
+            Buffer.BlockCopy(xfer, 0, buffer, 0, (int)dataSize);
 
             _downloadExposure.TrySetResult(null);
             return;
