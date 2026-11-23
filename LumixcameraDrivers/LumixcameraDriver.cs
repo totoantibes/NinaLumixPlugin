@@ -176,7 +176,17 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
         // card — on PC-only the card's state does not matter.
         private void ReportCardCapacity(ushort saveTarget) {
             uint? free = ReadCardFreeFrames();
-            if (free == null || !SaveTargetUsesCard(saveTarget)) { return; }
+            if (!SaveTargetUsesCard(saveTarget)) { return; }
+            if (free == null) {
+                // No usable count AND the save target writes to the card. This is the dangerous combination,
+                // not a reason to stay quiet: the camera has somewhere it is meant to write and cannot tell us
+                // there is room. An absent card reads this way — 0xFFFFFFFF free with status 0x2, measured on a
+                // body with no card in it — and so, as far as we know, does a body that simply does not report
+                // capacity. Both deserve the same warning, because both end in frames that never arrive.
+                Logger.Warning("[LumixCard] the save target writes to the SD card, but the camera reports no usable card capacity — if the body has no card, or a card it cannot write to, captures will fail.");
+                Notification.ShowWarning("The save target writes to the camera's SD card, but the camera reports no usable card capacity. Check that a card is present and writable, or set the plugin's save target to PC only.");
+                return;
+            }
             if (free.Value == 0) {
                 Logger.Error("[LumixCard] the SD card is full and the save target writes to it — captures will fail until the card is cleared or the save target is set to PC only.");
                 Notification.ShowError("The camera's SD card is full and the save target writes to it. Clear the card, or set the plugin's save target to PC only.");
@@ -196,7 +206,7 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
             if (_lastKnownCardFreeFrames.HasValue) {
                 return $" The SD card was last reported as having room for {_lastKnownCardFreeFrames.Value} frame(s).";
             }
-            return " If the save target includes the SD card, check that the card is not full.";
+            return " If the save target includes the SD card, check that a card is present and not full.";
         }
 
         // Fail the exposure NINA is awaiting, so a frame that cannot be delivered ends as a failed capture.

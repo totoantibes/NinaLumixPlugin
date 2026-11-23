@@ -243,7 +243,10 @@ namespace LumixWrapper {
         // That hex is what settled the layouts, measured on a DC-BGH1 in extended mode on 2026-11-23:
         //
         //   GetFreeSpaceInImages  FF-FF-FF-FF 00-00-00-00 ...   a single word, 0xFFFFFFFF meaning "no number"
-        //   GetStatusOfCards      02-00-00-00 00-00-00-00 ...   a single word, 0x2 with the save target on PC
+        //   GetStatusOfCards      02-00-00-00 00-00-00-00 ...   a single word, 0x2
+        //
+        // Those two were read with NO CARD in the body (and the save target on PC), so that pair is the
+        // card-absent state. Whether a card that is present but full reads the same way is still unmeasured.
         //   GetBatteryInfo        11-00-00-16 08-00-00-00 64-00-00-00 64-00-FF-FF
         //
         // So the battery call is NOT a single word: its first 32 bits are 0x16000011, which is not a level.
@@ -263,8 +266,8 @@ namespace LumixWrapper {
         public static bool Ext_TryGetFreeSpaceInImages(out uint images, out uint retError, out string rawHead) =>
             TryReadTetherWord(TetherWord.FreeSpaceInImages, out images, out retError, out rawHead);
 
-        /// <summary>What the body returns from GetFreeSpaceInImages instead of a count. Observed with the save
-        /// target on PC only; whether a full card also reports it is not yet known.</summary>
+        /// <summary>What the body returns from GetFreeSpaceInImages instead of a count. Measured with no card in
+        /// the body; whether a card that is present but full reports it too is not yet known.</summary>
         public const uint CARD_FRAMES_NO_NUMBER = uint.MaxValue;
 
         /// <summary>Per-card status word as the Tether DLL reports it. Layout is undocumented; the raw bytes
