@@ -29,6 +29,67 @@ namespace LumixWrapper {
         private static GCHandle _devPin;
         private static IntPtr _devBuf = IntPtr.Zero;    // extended device-info buffer (array-max 64 layout)
 
+        // ---- live-view buffers ----
+        // Same rule as the object buffer below: this SDK writes into buffers after the call that supplied
+        // them has returned, and on 2026-11-23 at 16:15:34 it faulted doing exactly that with a live-view
+        // frame. All four destinations in Get_LiveView_data - the JPEG and the three info structs - were
+        // locals passed by `ref`, pinned only for the duration of the call. They are now one permanently
+        // pinned block.
+        //
+        // The info structs get a fixed 4 KB slot each rather than Marshal.SizeOf: the managed declarations in
+        // this binding have already proved narrower than what the Tether DLL actually writes (see the
+        // capability getters, which copy out of a large scratch for that reason), and over-allocating a few KB
+        // costs nothing next to another out-of-bounds write. The three are write-only - nothing reads them
+        // back - so their layout does not matter, only that the SDK has room.
+        private const int LV_INFO_SLOT_BYTES = 4096;
+        private static byte[] _lvBacking;
+        private static GCHandle _lvPin;
+        private static IntPtr _lvHist, _lvPosture, _lvLevel, _lvJpeg;
+
+        [DllImport(DLLNAME, EntryPoint = "LMX_func_api_Get_LiveView_data", ExactSpelling = true, CallingConvention = cc)]
+        private static extern byte Ext_Get_LiveView_data_Ptr(
+            IntPtr pHistgram, out uint pHistgramSize,
+            IntPtr pPosture, out uint pPostureSize,
+            IntPtr pLevel, out uint pLevelSize,
+            IntPtr pJpeg, out uint pJpegSize, IntPtr ctx, out uint retError);
+
+        private static bool EnsureLiveViewBuffers() {
+            if (_lvBacking != null) { return true; }
+            try {
+                _lvBacking = new byte[3 * LV_INFO_SLOT_BYTES + (int)LMX_DEF_LIVEVIEW_STREAMDATA_SIZE_MAX];
+                _lvPin = GCHandle.Alloc(_lvBacking, GCHandleType.Pinned);
+                IntPtr b = _lvPin.AddrOfPinnedObject();
+                _lvHist = b;
+                _lvPosture = b + LV_INFO_SLOT_BYTES;
+                _lvLevel = b + 2 * LV_INFO_SLOT_BYTES;
+                _lvJpeg = b + 3 * LV_INFO_SLOT_BYTES;
+                return true;
+            } catch (Exception) {
+                _lvBacking = null;
+                return false;
+            }
+        }
+
+        /// <summary>Offset of the JPEG frame within the buffer <see cref="Ext_TryGetLiveViewData"/> returns.</summary>
+        public static int LiveViewJpegOffset => 3 * LV_INFO_SLOT_BYTES;
+
+        /// <summary>Extended-mode live view, reading into the permanently pinned block. The array handed back
+        /// is that block: the frame starts at <see cref="LiveViewJpegOffset"/> and stays valid only until the
+        /// next call, so copy out anything that must outlive it. false in standard mode, where the caller must
+        /// use the ref-based overload against the public SDK instead.</summary>
+        public static bool Ext_TryGetLiveViewData(out byte[] block, out uint jpegSize, out uint retError) {
+            block = null;
+            jpegSize = 0;
+            retError = 0;
+            if (!NativeBinding.ExtendedMode) { return false; }
+            EnsureTetherBuffers();
+            if (!EnsureLiveViewBuffers()) { return false; }
+            byte r = Ext_Get_LiveView_data_Ptr(_lvHist, out _, _lvPosture, out _, _lvLevel, out _,
+                                               _lvJpeg, out jpegSize, _tetherCtx, out retError);
+            block = _lvBacking;
+            return r == LMX_BOOL_TRUE;
+        }
+
         // ---- object-transfer buffer ----
         // The SDK writes into buffers AFTER the call that supplied them has returned: on 2026-11-23 at
         // 16:15:34 Lmxptpif's own thread faulted in memcpy writing a 23,881-byte frame into a 1.4 MB region

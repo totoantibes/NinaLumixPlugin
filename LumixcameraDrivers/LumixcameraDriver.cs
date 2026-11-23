@@ -973,27 +973,41 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
                 // buffer went to the JPEG decoder, so an empty poll meant decoding a zero-filled array: that
                 // throws WINCODEC_ERR_COMPONENTNOTFOUND, and because NINA's loop has no catch of its own the
                 // exception ended live view (observed 2026-11-23 16:15:33). Poll until a frame actually arrives.
-                byte[] jpegDataPos = new byte[LMX_DEF_LIVEVIEW_STREAMDATA_SIZE_MAX];
+                // In extended mode all four destinations come from one permanently pinned block — the JPEG and
+                // the three write-only info structs. Handing this SDK a `ref` to a local is what produced the
+                // use-after-free we proved from the 16:15 dump. Standard mode is unchanged: that is a different
+                // DLL, and nothing has been shown about its buffer lifetime either way.
+                bool pinnedPath = NativeBinding.ExtendedMode;
+                byte[] lvFallback = pinnedPath ? null : new byte[LMX_DEF_LIVEVIEW_STREAMDATA_SIZE_MAX];
+                byte[] block;
+                int jpegAt;
                 uint returnedJpegSize;
                 while (true) {
                     token.ThrowIfCancellationRequested();
-                    LMX_STRUCT_LIVEVIEW_INFO_HISTGRAM histgramBuf = new LMX_STRUCT_LIVEVIEW_INFO_HISTGRAM();
-                    uint histgramBufSize = LMX_DEF_LIVEVIEW_HISTGRAM_ELEMENT_SIZE;
-                    LMX_STRUCT_LIVEVIEW_INFO_POSTURE postureBuf = new LMX_STRUCT_LIVEVIEW_INFO_POSTURE();
-                    uint postureBufSize = 32;
-                    LMX_STRUCT_LIVEVIEW_INFO_LEVEL levelBuf = new LMX_STRUCT_LIVEVIEW_INFO_LEVEL();
-                    uint levelBufSize = 32;// sizeof(LMX_STRUCT_LIVEVIEW_INFO_LEVEL);
-                    byte r = LMX_func_api_Get_LiveView_data(ref histgramBuf, out histgramBufSize, ref postureBuf, out postureBufSize, ref levelBuf, out levelBufSize, ref jpegDataPos[0], out returnedJpegSize, out retError);
-                    if (r == LMX_BOOL_TRUE && returnedJpegSize > 4 && returnedJpegSize <= jpegDataPos.Length
-                        && jpegDataPos[0] == 0xFF && jpegDataPos[1] == 0xD8 && jpegDataPos[2] == 0xFF) {
+                    byte r;
+                    if (pinnedPath) {
+                        jpegAt = LumixCam.LiveViewJpegOffset;
+                        r = LumixCam.Ext_TryGetLiveViewData(out block, out returnedJpegSize, out retError) ? (byte)LMX_BOOL_TRUE : (byte)0;
+                    } else {
+                        LMX_STRUCT_LIVEVIEW_INFO_HISTGRAM histgramBuf = new LMX_STRUCT_LIVEVIEW_INFO_HISTGRAM();
+                        LMX_STRUCT_LIVEVIEW_INFO_POSTURE postureBuf = new LMX_STRUCT_LIVEVIEW_INFO_POSTURE();
+                        LMX_STRUCT_LIVEVIEW_INFO_LEVEL levelBuf = new LMX_STRUCT_LIVEVIEW_INFO_LEVEL();
+                        block = lvFallback;
+                        jpegAt = 0;
+                        r = LMX_func_api_Get_LiveView_data(ref histgramBuf, out _, ref postureBuf, out _, ref levelBuf, out _, ref lvFallback[0], out returnedJpegSize, out retError);
+                    }
+                    if (r == LMX_BOOL_TRUE && block != null && returnedJpegSize > 4
+                        && jpegAt + returnedJpegSize <= block.Length
+                        && block[jpegAt] == 0xFF && block[jpegAt + 1] == 0xD8 && block[jpegAt + 2] == 0xFF) {
                         break;
                     }
                     System.Threading.Thread.Sleep(LIVEVIEW_EMPTY_POLL_WAIT_MS);
                 }
 
-                // Trim to the bytes the camera actually wrote; the rest of the buffer is stale or zero.
+                // Copy out the bytes the camera actually wrote. Required, not tidiness: on the pinned path the
+                // block is shared and the next frame overwrites it.
                 byte[] frame = new byte[returnedJpegSize];
-                Array.Copy(jpegDataPos, frame, (int)returnedJpegSize);
+                Buffer.BlockCopy(block, jpegAt, frame, 0, (int)returnedJpegSize);
 
                 var metaData = new ImageMetaData();
                 metaData.FromCamera(this);
