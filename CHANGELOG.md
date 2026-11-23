@@ -15,6 +15,9 @@
   Bayer frame and handed to N.I.N.A. as bayered, so its normal debayer step produces a colour
   preview instead of the previous 16-bit grayscale conversion.
 - The **Prefer JPEG** capture fallback uses the same path, so JPEG captures are also shown in colour.
+- Live view no longer stops when the camera has no frame ready. The frame is trimmed to the size the
+  camera reports and an empty poll waits briefly, instead of handing the JPEG decoder an empty
+  buffer - which threw an error out of N.I.N.A.'s live-view loop and ended the preview.
 - **The SD card is checked at connect.** When the save target writes to the card, the plugin
   warns if the card is full, nearly full, missing, or cannot be read - and says which. On a
   PC-only save target nothing is raised, because the card is not used.
