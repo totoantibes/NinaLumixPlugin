@@ -149,11 +149,21 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
         // undocumented Tether exports, so the raw bytes are logged either way: this line is what will pin their
         // layout down on a real body, and it is also why they are only ever called from NINA's own thread —
         // never from inside the SDK's capture callback.
+        // No SD card holds this many frames, so a bigger number is not a count. Measured: with the save target
+        // on PC only the body answers 0xFFFFFFFF, which read as "room for 4294967295 more frame(s)" until this
+        // check existed.
+        private const uint CARD_FRAMES_IMPLAUSIBLE = 1000000;
+
         private uint? ReadCardFreeFrames() {
             bool ok = LumixCam.Ext_TryGetFreeSpaceInImages(out uint images, out uint spaceErr, out string spaceRaw);
             LumixCam.Ext_TryGetStatusOfCards(out uint status, out uint statusErr, out string statusRaw);
             if (!ok) {
                 Logger.Info($"[LumixCard] the camera did not report card capacity (err={spaceErr}, bytes={spaceRaw}; status err={statusErr}, bytes={statusRaw}).");
+                _lastKnownCardFreeFrames = null;
+                return null;
+            }
+            if (images == LumixCam.CARD_FRAMES_NO_NUMBER || images >= CARD_FRAMES_IMPLAUSIBLE) {
+                Logger.Info($"[LumixCard] the camera gave no usable frame count (0x{images:X8}); card status=0x{status:X} (space bytes={spaceRaw}, status bytes={statusRaw}).");
                 _lastKnownCardFreeFrames = null;
                 return null;
             }
@@ -509,21 +519,21 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
         }
 
         private int ReadBatteryPercent() {
-            if (!LumixCam.Ext_TryGetBatteryInfo(out uint word, out uint err, out string rawHead)) {
+            if (!LumixCam.Ext_TryGetBatteryInfo(out uint level, out uint levelAlt, out uint head, out uint err, out string rawHead)) {
                 Logger.Info($"[LumixBattery] the camera did not report battery info (err={err}, bytes={rawHead}).");
                 return -1;
             }
-            if (word != _lastLoggedBatteryWord) {
-                _lastLoggedBatteryWord = word;
-                Logger.Info($"[LumixBattery] battery word=0x{word:X8} ({word}), bytes={rawHead}.");
+            if (level != _lastLoggedBatteryWord) {
+                _lastLoggedBatteryWord = level;
+                // Both candidates are logged: offset 8 is the one used, offset 12 held the same 100 on the body
+                // this was measured on, and only a reading at some other level can rule it out.
+                Logger.Info($"[LumixBattery] level={level} (offset 8), alt={levelAlt} (offset 12), head=0x{head:X8}, bytes={rawHead}.");
             }
-            // The encoding is undocumented. A plain 1-100 percentage is the reading this accepts; 0xFFFF and
-            // 0xFFFFFFFF are the usual "unknown or external power" fillers. Zero is treated as unknown too, not
-            // as an empty battery: a call that returns success without writing leaves the scratch zeroed, and a
-            // genuinely flat battery would have switched the body off rather than answered. Anything else cannot
-            // honestly be turned into a percentage, so it stays unknown — and every distinct word is logged
-            // above with its raw bytes, so the real encoding can be read straight off a session log.
-            if (word >= 1 && word <= 100) { return (int)word; }
+            // Zero is treated as unknown, not as an empty battery: a call that returns success without writing
+            // leaves the scratch zeroed, and a genuinely flat battery would have switched the body off rather
+            // than answered. Anything outside 1-100 cannot honestly be shown as a percentage, so it stays
+            // unknown — and the line above keeps the raw struct in the log either way.
+            if (level >= 1 && level <= 100) { return (int)level; }
             return -1;
         }
 

@@ -192,10 +192,31 @@ namespace LumixWrapper {
         }
         public static byte Ext_GetImageQuality(out uint quality, out uint retError) =>
             Ext_ImageInfo_GetImageQuality(out quality, _tetherCtx, out retError);
-        /// <summary>Raw battery word as the Tether DLL reports it, or false when it will not say. The encoding
-        /// is undocumented, so the caller gets the raw bytes too and decides what is safe to show.</summary>
-        public static bool Ext_TryGetBatteryInfo(out uint info, out uint retError, out string rawHead) =>
-            TryReadTetherWord(TetherWord.BatteryInfo, out info, out retError, out rawHead);
+        /// <summary>Battery reading. <paramref name="level"/> is the uint32 at offset 8 of the struct and the
+        /// field to use; <paramref name="levelAlt"/> is the uint16 at offset 12, the other candidate, which only
+        /// a reading at some level other than 100% can rule out; <paramref name="head"/> is the first 32 bits,
+        /// logged so the struct stays visible. false when the call itself fails.</summary>
+        public static bool Ext_TryGetBatteryInfo(out uint level, out uint levelAlt, out uint head, out uint retError, out string rawHead) {
+            level = 0;
+            levelAlt = 0;
+            bool ok = TryReadTetherWord(TetherWord.BatteryInfo, out head, out retError, out rawHead);
+            if (!ok) { return false; }
+            level = ScratchUInt32(8);
+            levelAlt = ScratchUInt16(12);
+            return true;
+        }
+
+        // Read a field out of the scratch the last TryReadTetherWord filled. Bounds-checked: these offsets come
+        // from an observed layout, not a documented one.
+        private static uint ScratchUInt32(int offset) {
+            if (_capBacking == null || offset + 4 > TETHER_WORD_SCRATCH_BYTES) { return 0; }
+            return (uint)(_capBacking[offset] | (_capBacking[offset + 1] << 8) | (_capBacking[offset + 2] << 16) | (_capBacking[offset + 3] << 24));
+        }
+
+        private static uint ScratchUInt16(int offset) {
+            if (_capBacking == null || offset + 2 > TETHER_WORD_SCRATCH_BYTES) { return 0; }
+            return (uint)(_capBacking[offset] | (_capBacking[offset + 1] << 8));
+        }
 
         // ===================== Save destination (SetupFilesConfig target) =====================
         // 0=SD only (default), 1=PC only (cardless), 2=PC+SD. On capture with a PC target the camera fires
@@ -214,23 +235,37 @@ namespace LumixWrapper {
             NativeBinding.ExtendedMode ? Ext_SetupFilesConfig_SetTarget(unParam, _tetherCtx, out retError) : Pub_SetupFilesConfig_Set_Target(unParam, out retError);
 
         // ===================== Card capacity and battery (extended only) =====================
-        // The public SDK headers carry no storage call at all, but the Tether DLL exports several. Two are
-        // useful here: how many more frames the card holds, and the per-card status. Both are undocumented,
-        // so they are declared with the BUFFER shape (IntPtr, not `out uint`) and handed the 16 KB pinned
-        // scratch: if the real signature writes a struct rather than a single word, it cannot overrun
-        // anything. We then read the first 32-bit field. The first bytes of the buffer are returned as hex so
-        // the layout can be confirmed from a real log rather than assumed.
+        // The public SDK headers carry no storage or battery call at all; the Tether DLL exports several, all
+        // undocumented. They are declared with the BUFFER shape (IntPtr, not `out uint`) and handed the 16 KB
+        // pinned scratch, so that a call writing a struct rather than a single word cannot overrun anything,
+        // and the first bytes come back as hex on every read.
+        //
+        // That hex is what settled the layouts, measured on a DC-BGH1 in extended mode on 2026-11-23:
+        //
+        //   GetFreeSpaceInImages  FF-FF-FF-FF 00-00-00-00 ...   a single word, 0xFFFFFFFF meaning "no number"
+        //   GetStatusOfCards      02-00-00-00 00-00-00-00 ...   a single word, 0x2 with the save target on PC
+        //   GetBatteryInfo        11-00-00-16 08-00-00-00 64-00-00-00 64-00-FF-FF
+        //
+        // So the battery call is NOT a single word: its first 32 bits are 0x16000011, which is not a level.
+        // 0x64 = 100 - the level of the dummy battery in the body - appears twice, as a uint32 at offset 8 and
+        // as a uint16 at offset 12, with 8 at offset 4 looking like a size or count. Offset 8 is read as the
+        // level and offset 12 reported alongside it, because a reading at 100% cannot tell the two apart.
         [DllImport(DLLNAME, EntryPoint = "LMX_func_api_GetFreeSpaceInImages", ExactSpelling = true, CallingConvention = cc)]
         private static extern byte Ext_GetFreeSpaceInImages(IntPtr buf, IntPtr ctx, out uint retError);
 
         [DllImport(DLLNAME, EntryPoint = "LMX_func_api_GetStatusOfCards", ExactSpelling = true, CallingConvention = cc)]
         private static extern byte Ext_GetStatusOfCards(IntPtr buf, IntPtr ctx, out uint retError);
 
-        /// <summary>Frames the camera says still fit on the card, or false when it will not say (standard mode,
-        /// a body without the call, or a refused call). The number is advisory: report it, never gate a capture
-        /// on it.</summary>
+        /// <summary>Frames the camera says still fit on the card, as it reports them - including
+        /// <see cref="CARD_FRAMES_NO_NUMBER"/> when it declines to give one. false when the call itself fails
+        /// (standard mode, a body without the export, a refused call). Advisory: report it, never gate a
+        /// capture on it.</summary>
         public static bool Ext_TryGetFreeSpaceInImages(out uint images, out uint retError, out string rawHead) =>
             TryReadTetherWord(TetherWord.FreeSpaceInImages, out images, out retError, out rawHead);
+
+        /// <summary>What the body returns from GetFreeSpaceInImages instead of a count. Observed with the save
+        /// target on PC only; whether a full card also reports it is not yet known.</summary>
+        public const uint CARD_FRAMES_NO_NUMBER = uint.MaxValue;
 
         /// <summary>Per-card status word as the Tether DLL reports it. Layout is undocumented; the raw bytes
         /// come back alongside so a log can pin it down.</summary>
@@ -263,7 +298,9 @@ namespace LumixWrapper {
             }
         }
 
-        private const int TETHER_WORD_SCRATCH_BYTES = 16;
+        // 32 rather than 16: the battery struct runs to at least offset 14, so a wider window is what shows
+        // whether more fields follow the ones already identified.
+        private const int TETHER_WORD_SCRATCH_BYTES = 32;
 
         // ===================== Extended connection (raw buffers + held context) =====================
         /// <summary>Enumerate cameras via the extended DLL. Returns model names (index-aligned).</summary>
