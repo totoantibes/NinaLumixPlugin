@@ -10,6 +10,9 @@ on:
     tags:
       - '[0-9]+.[0-9]+.[0-9]+.[0-9]+'
 
+permissions:
+  contents: write
+
 env:
   # Adjust this to your plugin title
   PLUGIN_NAME: "LumixPlugin"
@@ -21,7 +24,7 @@ jobs:
     runs-on: windows-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
 
       # In case you need more sub folders add these here
       - name: Prepare folders
@@ -45,11 +48,15 @@ jobs:
 
 
       # Add all necessary files that the plugin needs to the packages folder - basically all items that are normally in your post build event on your local builds
+      # The assembly is built as LumixPlugin.dll (see AssemblyName in the csproj), not Roberthasson.NINA.Lumixcamera.dll
       - name: Prepare package
         run: |
-          Copy-Item "D:\a\NinaLumixPlugin\NinaLumixPlugin\bin\Release\net8.0-windows\Roberthasson.NINA.Lumixcamera.dll" "packages/${{ env.PLUGIN_NAME }}/${{ env.PLUGIN_NAME }}.dll" -Force
-          Copy-Item "D:\a\NinaLumixPlugin\NinaLumixPlugin\bin\Release\net8.0-windows\Roberthasson.NINA.Lumixcamera.pdb" "packages/${{ env.PLUGIN_NAME }}/${{ env.PLUGIN_NAME }}.pdb" -Force
-          Copy-Item "D:\a\NinaLumixPlugin\NinaLumixPlugin\bin\Release\net8.0-windows\Library\Lmxptpif.dll" "packages/${{ env.PLUGIN_NAME }}/Lmxptpif.dll" -Force      
+          Copy-Item "${{ github.workspace }}\bin\Release\net8.0-windows\${{ env.PLUGIN_NAME }}.dll" "packages/${{ env.PLUGIN_NAME }}/${{ env.PLUGIN_NAME }}.dll" -Force
+          Copy-Item "${{ github.workspace }}\bin\Release\net8.0-windows\${{ env.PLUGIN_NAME }}.pdb" "packages/${{ env.PLUGIN_NAME }}/${{ env.PLUGIN_NAME }}.pdb" -Force
+          Copy-Item "${{ github.workspace }}\bin\Release\net8.0-windows\Library\Lmxptpif.dll" "packages/${{ env.PLUGIN_NAME }}/Lmxptpif.dll" -Force
+          Copy-Item "${{ github.workspace }}\bin\Release\net8.0-windows\Library\libraw.dll" "packages/${{ env.PLUGIN_NAME }}/libraw.dll" -Force
+          New-Item -ItemType Directory -Force "packages/${{ env.PLUGIN_NAME }}/LibRaw" | Out-Null
+          Copy-Item "${{ github.workspace }}\Library\LibRaw\*" "packages/${{ env.PLUGIN_NAME }}/LibRaw/" -Force
 
       - name: Create Plugin archives and manifests
         run: |
@@ -57,31 +64,26 @@ jobs:
           pwsh CreateNET7Manifest.ps1 -file packages/${{ env.PLUGIN_NAME }}/${{ env.PLUGIN_NAME }}.dll -installerUrl https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/${{ env.PLUGIN_NAME }}.${{ github.ref_name }}.zip -createArchive -includeAll -appendVersionToArchive
           Rename-Item -Path "manifest.json" -NewName "${{ env.PLUGIN_NAME }}.${{ github.ref_name }}.manifest.json" 
 
+      # Release body = the CHANGELOG.md section whose heading matches the tag (e.g. "## 1.2.1.0")
+      - name: Extract release notes from CHANGELOG
+        shell: pwsh
+        run: |
+          $lines = Get-Content CHANGELOG.md
+          $out = @(); $take = $false
+          foreach ($l in $lines) {
+            if ($l -match '^## ') { $take = ($l.Trim() -eq "## ${{ github.ref_name }}") ; continue }
+            if ($take) { $out += $l }
+          }
+          if ($out.Count -eq 0) { $out = @("Release ${{ github.ref_name }}") }
+          $out -join "`n" | Set-Content RELEASE_NOTES.md
+          Get-Content RELEASE_NOTES.md
+
       - name: Create Release
-        id: create_release
-        uses: actions/create-release@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
-          release_name: Release ${{ github.ref_name }}
-          draft: false
-          prerelease: false
-      - name: Upload Plugin Zip
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./${{ env.PLUGIN_NAME }}.${{ github.ref_name }}.zip
-          asset_name: ${{ env.PLUGIN_NAME }}.${{ github.ref_name }}.zip
-          asset_content_type: application/zip
-      - name: Upload Manifest
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./${{ env.PLUGIN_NAME }}.${{ github.ref_name }}.manifest.json
-          asset_name: ${{ env.PLUGIN_NAME }}.${{ github.ref_name }}.manifest.json
-          asset_content_type: application/json
+          name: Release ${{ github.ref_name }}
+          body_path: RELEASE_NOTES.md
+          files: |
+            ${{ env.PLUGIN_NAME }}.${{ github.ref_name }}.zip
+            ${{ env.PLUGIN_NAME }}.${{ github.ref_name }}.manifest.json

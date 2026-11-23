@@ -97,6 +97,12 @@ namespace Roberthasson.NINA.Lumixcamera {
                 && NativeLibrary.TryLoad(ActiveDllPath, out var handle)) {
                 return handle;
             }
+            // Bundled LibRaw (optional RW2 decoder, see LibRawDecoder): load by full path from the plugin folder.
+            if (string.Equals(libraryName, LumixcameraDrivers.LibRawDecoder.DllName, StringComparison.OrdinalIgnoreCase)
+                && File.Exists(LumixcameraDrivers.LibRawDecoder.DllPath)
+                && NativeLibrary.TryLoad(LumixcameraDrivers.LibRawDecoder.DllPath, out var librawHandle)) {
+                return librawHandle;
+            }
             return IntPtr.Zero; // fall back to default resolution
         }
     }

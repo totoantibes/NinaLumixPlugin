@@ -109,6 +109,18 @@ namespace Roberthasson.NINA.Lumixcamera.Properties {
         
         [global::System.Configuration.UserScopedSettingAttribute()]
         [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
+        [global::System.Configuration.DefaultSettingValueAttribute("False")]
+        public bool UseBuiltInLibRaw {
+            get {
+                return ((bool)(this["UseBuiltInLibRaw"]));
+            }
+            set {
+                this["UseBuiltInLibRaw"] = value;
+            }
+        }
+        
+        [global::System.Configuration.UserScopedSettingAttribute()]
+        [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
         [global::System.Configuration.DefaultSettingValueAttribute("0")]
         public double PixelPitch {
             get {

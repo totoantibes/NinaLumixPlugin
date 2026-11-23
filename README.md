@@ -3,6 +3,8 @@ Lumix native plugin provides a USB direct method to interface with [compatible L
 
 This differs from the ASCOM Driver which interfaces over wifi and http. As the ASCOM driver allows a wider set of cameras it also does not provide a liveview and is rather slow in downloading the RAW images to Nina.
 
+Live view is shown in **colour**: the camera's live-view JPEG is re-mosaiced into a Bayer frame and debayered by N.I.N.A. like a normal capture (the same applies to JPEG captures when *Prefer JPEG* is enabled).
+
 # Two modes: Standard and Extended
 
 The plugin runs in one of two modes, selected in the plugin options:
@@ -30,9 +32,18 @@ If the camera is not recognized by the driver 2 options are possible:
 
 The driver cannot **set** the exposure-mode dial (A/S/P/M) — that must be set on the camera body. It **reads** the current mode and warns if the camera is not in a manual-capable mode. Manual (M) and the **C1–C3 custom presets** (assumed to be M-based, e.g. an astro preset) are accepted; other modes raise a warning but do not block.
 
+# RAW decoding on N.I.N.A. 3.2 and earlier (built-in LibRaw)
+
+N.I.N.A. 3.3 decodes Lumix RW2 with its own LibRaw and needs nothing from the plugin. On **3.2 and earlier**, N.I.N.A.'s DCRaw/FreeImage converters predate the GH7, S5 II, S9 and G9 II, so their frames show as noise. For that case the plugin bundles **LibRaw 0.22** (`libraw.dll`, official libraw.org build, LGPL 2.1 / CDDL 1.0) and can decode the RW2 itself:
+
+* Tick **Use built-in LibRaw decoder** in the plugin options. It is **off by default** and works in standard and extended mode; no reconnect needed.
+* The unpacked Bayer frame is handed to N.I.N.A. as a 16-bit bayered array with the Bayer pattern read from LibRaw, so it goes through N.I.N.A.'s normal debayer, statistics and file-saving pipeline. The plugin's *bit depth* setting is a floor: a body that delivers more bits is not truncated. N.I.N.A.'s camera *bit scaling* profile option is honoured.
+* If the decoder cannot handle a frame (DLL missing, unknown file, ...) the plugin logs why, warns once and **falls back to N.I.N.A.'s own converter** — enabling the option cannot make things worse than before.
+* Not needed on N.I.N.A. 3.3+; leave it off there.
+
 # Known Limitations
 * Lumix RAW data assume a 14-bit depth. Overriding the bit depth is possible from the options page.
-* RAW (.RW2) decoding depends on your N.I.N.A. version. **N.I.N.A. 3.3 and later** convert RAW with **LibRaw**, which decodes RW2 directly — no workaround needed. On **3.2 and earlier** the legacy DCRaw converter does not support RW2, so set the RAW decoder to **FreeImage** in the camera advanced settings (Equipment tab). A very recent camera whose RW2 variant your N.I.N.A.'s decoder does not yet recognise (e.g. the GH7) may still show a noisy preview even under LibRaw; enabling **Prefer JPEG** in the plugin options is a fallback for that case (extended mode only).
+* RAW (.RW2) decoding depends on your N.I.N.A. version. **N.I.N.A. 3.3 and later** convert RAW with **LibRaw 0.22**, which decodes RW2 from all current bodies (GH7, S5 II, S9, G9 II ...) directly — no workaround needed. On **3.2 and earlier** the DCRaw/FreeImage converters do not know the newer bodies and the preview is noise; for those, enable **Use built-in LibRaw decoder** in the plugin options (see below). **Prefer JPEG** (extended mode only) remains as a last resort.
 * In **standard mode** Bulb is unavailable, so a requested exposure is snapped to the nearest supported shutter speed (max 60 s). Bulb / >60 s requires **extended mode**.
 
 # Getting help

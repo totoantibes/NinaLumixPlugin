@@ -41,6 +41,15 @@
                 </ComboBox>
             </StackPanel>
             <Separator Margin="0,0,0,8" />
+            <TextBlock FontWeight="Bold" Margin="0,0,0,4" Text="RAW decoding" />
+            <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+                <CheckBox IsChecked="{Binding UseBuiltInLibRaw}" VerticalAlignment="Center" />
+                <TextBlock Margin="6,0,0,0" VerticalAlignment="Center">
+                    <TextBlock.Text>Use built-in LibRaw decoder (for N.I.N.A. 3.2 and earlier)</TextBlock.Text>
+                    <TextBlock.ToolTip>Decodes the camera's RW2 inside the plugin with the bundled LibRaw 0.22 instead of N.I.N.A.'s RAW converter. Enable this only if the preview is noise on N.I.N.A. 3.2 or earlier with a newer body (GH7, S5 II, S9, G9 II ...) — their DCRaw/FreeImage converters don't know these cameras. Not needed on N.I.N.A. 3.3+, which has its own LibRaw. If the built-in decoder fails, the frame falls back to N.I.N.A.'s converter automatically. Works in standard and extended mode.</TextBlock.ToolTip>
+                </TextBlock>
+            </StackPanel>
+            <Separator Margin="0,0,0,8" />
             <!--<StackPanel Orientation="Horizontal">
                 <TextBlock Text="Default Notification Message" />
                 <TextBox MinWidth="50" Text="{Binding DefaultNotificationMessage}" />

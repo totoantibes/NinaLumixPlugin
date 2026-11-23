@@ -189,6 +189,18 @@ namespace Roberthasson.NINA.Lumixcamera {
             }
         }
 
+        // Decode RW2 in-plugin with the bundled LibRaw 0.22 instead of N.I.N.A.'s converter (for N.I.N.A. <= 3.2).
+        public bool UseBuiltInLibRaw {
+            get {
+                return Settings.Default.UseBuiltInLibRaw;
+            }
+            set {
+                Settings.Default.UseBuiltInLibRaw = value;
+                CoreUtil.SaveSettings(Settings.Default);
+                RaisePropertyChanged();
+            }
+        }
+
         // 0 = SD only (default), 1 = PC only (cardless), 2 = PC + SD. Extended (Tether) mode only.
         public int SaveTarget {
             get {

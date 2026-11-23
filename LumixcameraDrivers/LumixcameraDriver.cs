@@ -297,6 +297,7 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
 
         private ushort _lastNotifiedModePos = 0xFFFF;
         private bool _warnedJpeg = false;   // warn once per connect if the camera is capturing JPEG, not RAW
+        private bool _warnedLibRaw = false; // warn once per connect if the built-in LibRaw decoder failed and we fell back
         private List<(double seconds, int raw)> _ssTable;
 
         private static bool IsManualMode(ushort modePos) =>
@@ -892,11 +893,38 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
                     if (!Properties.Settings.Default.PreferJpeg && !_warnedJpeg) {
                         _warnedJpeg = true;
                         Notification.ShowWarning(NativeBinding.ExtendedMode
-                            ? "Camera captured JPEG, not RAW (shown in grayscale). Reconnect — the plugin sets RAW in extended mode."
-                            : "Camera captured JPEG, not RAW (shown in grayscale). Set the camera's image quality to RAW on the body — the plugin can't change it in standard mode.");
+                            ? "Camera captured JPEG, not RAW. Reconnect — the plugin sets RAW in extended mode."
+                            : "Camera captured JPEG, not RAW. Set the camera's image quality to RAW on the body — the plugin can't change it in standard mode.");
                     }
-                    Logger.Info($"Captured object is JPEG (PreferJpeg={Properties.Settings.Default.PreferJpeg}) — decoding to grayscale for display.");
-                    return DecodeJpegToExposure(buffer, metaData);
+                    Logger.Info($"Captured object is JPEG (PreferJpeg={Properties.Settings.Default.PreferJpeg}) — re-mosaicing to Bayer for colour display.");
+                    return DecodeJpegToBayerExposure(buffer, metaData);
+                }
+
+                // Optional: decode the RW2 in-plugin with the bundled LibRaw 0.22 (for N.I.N.A. <= 3.2, whose
+                // DCRaw/FreeImage converters don't know newer bodies — GH7, S5 II, S9 ...). OFF by default;
+                // N.I.N.A. 3.3+ has its own LibRaw. On any failure fall through to N.I.N.A.'s converter.
+                if (Properties.Settings.Default.UseBuiltInLibRaw) {
+                    bool bitScaling = _profileService.ActiveProfile.CameraSettings.BitScaling;
+                    if (LibRawDecoder.TryDecode(buffer, this.BitDepth, bitScaling, out var frame, out var librawError)) {
+                        if (frame.Pattern != SensorType.Monochrome && metaData.Camera.BayerPattern != BayerPatternEnum.None) {
+                            metaData.Camera.SensorType = frame.Pattern;
+                            metaData.Camera.BayerOffsetX = 0;
+                            metaData.Camera.BayerOffsetY = 0;
+                        }
+                        Logger.Info($"[LibRaw] decoded RW2 in-plugin: {frame.Width}x{frame.Height}, pattern={frame.Pattern}, max={frame.MaxPixelValue}, bitDepth={frame.BitDepth} (LibRaw {frame.LibRawVersion}).");
+                        return _exposureDataFactory.CreateImageArrayExposureData(
+                            input: frame.Pixels,
+                            width: frame.Width,
+                            height: frame.Height,
+                            bitDepth: frame.BitDepth,
+                            isBayered: frame.Pattern != SensorType.Monochrome,
+                            metaData: metaData);
+                    }
+                    Logger.Error($"[LibRaw] built-in decode failed, falling back to N.I.N.A.'s RAW converter: {librawError}");
+                    if (!_warnedLibRaw) {
+                        _warnedLibRaw = true;
+                        Notification.ShowWarning("Built-in LibRaw decoder failed (" + librawError + "). Falling back to N.I.N.A.'s RAW converter.");
+                    }
                 }
 
                 return _exposureDataFactory.CreateRAWExposureData(
@@ -909,29 +937,6 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
                 if (buffer != null) {
                     buffer = null;
                 }
-            }
-        }
-
-        /// <summary>Decode a JPEG buffer to a 16-bit greyscale image array exposure (same path as live view).
-        /// Used as the display fallback when NINA's RAW converter can't handle a camera's .RW2.</summary>
-        private IExposureData DecodeJpegToExposure(byte[] jpeg, ImageMetaData metaData) {
-            using (var memStream = new MemoryStream(jpeg)) {
-                memStream.Position = 0;
-                var decoder = new JpegBitmapDecoder(memStream, BitmapCreateOptions.IgnoreColorProfile, BitmapCacheOption.OnLoad);
-                var bitmap = new FormatConvertedBitmap();
-                bitmap.BeginInit();
-                bitmap.Source = decoder.Frames[0];
-                bitmap.DestinationFormat = System.Windows.Media.PixelFormats.Gray16;
-                bitmap.EndInit();
-                ushort[] outArray = new ushort[bitmap.PixelWidth * bitmap.PixelHeight];
-                bitmap.CopyPixels(outArray, 2 * bitmap.PixelWidth, 0);
-                return _exposureDataFactory.CreateImageArrayExposureData(
-                    input: outArray,
-                    width: bitmap.PixelWidth,
-                    height: bitmap.PixelHeight,
-                    bitDepth: 16,
-                    isBayered: false,
-                    metaData: metaData);
             }
         }
 
@@ -952,31 +957,71 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
                 LMX_STRUCT_LIVEVIEW_INFO_LEVEL levelBuf = new LMX_STRUCT_LIVEVIEW_INFO_LEVEL();
                 uint levelBufSize = 32;// sizeof(LMX_STRUCT_LIVEVIEW_INFO_LEVEL);
                 LMX_func_api_Get_LiveView_data(ref histgramBuf, out histgramBufSize, ref postureBuf, out postureBufSize, ref levelBuf, out levelBufSize, ref jpegDataPos[0], out returnedJpegSize, out retError);
-                using (var memStream = new MemoryStream(jpegDataPos)) {
-                    memStream.Position = 0;
 
-                    JpegBitmapDecoder decoder = new JpegBitmapDecoder(memStream, BitmapCreateOptions.IgnoreColorProfile, BitmapCacheOption.OnLoad);
-
-                    FormatConvertedBitmap bitmap = new FormatConvertedBitmap();
-                    bitmap.BeginInit();
-                    bitmap.Source = decoder.Frames[0];
-                    bitmap.DestinationFormat = System.Windows.Media.PixelFormats.Gray16;
-                    bitmap.EndInit();
-
-                    ushort[] outArray = new ushort[bitmap.PixelWidth * bitmap.PixelHeight];
-                    bitmap.CopyPixels(outArray, 2 * bitmap.PixelWidth, 0);
-
-                    var metaData = new ImageMetaData();
-                    metaData.FromCamera(this);
-                    return _exposureDataFactory.CreateImageArrayExposureData(
-                            input: outArray,
-                            width: bitmap.PixelWidth,
-                            height: bitmap.PixelHeight,
-                            bitDepth: 16,
-                            isBayered: false,
-                            metaData: metaData);
-                }
+                var metaData = new ImageMetaData();
+                metaData.FromCamera(this);
+                // The camera's live-view JPEG is already full colour. Re-mosaic it into a synthetic
+                // single-plane Bayer (RGGB) array and hand it to NINA as isBayered so NINA's own
+                // debayer step (the same one used for real captures) produces a colour preview,
+                // instead of flattening the frame to Gray16 as before.
+                return DecodeJpegToBayerExposure(jpegDataPos, metaData);
             });
+        }
+
+        /// <summary>
+        /// Decodes a JPEG frame that the camera already rendered in full colour (live view, or the
+        /// JPEG-capture fallback) and re-mosaics it into a synthetic single-plane Bayer array matching
+        /// this driver's declared SensorType (RGGB, offset 0,0), so it flows through NINA's normal
+        /// debayer pipeline instead of being collapsed to grayscale. Colour resolution is down-sampled
+        /// to sensor-pattern resolution in the process (one channel kept per pixel), which is irrelevant
+        /// for live-view framing/focus use but means this is NOT a substitute for real RAW capture data.
+        /// </summary>
+        private IExposureData DecodeJpegToBayerExposure(byte[] jpeg, ImageMetaData metaData) {
+            using (var memStream = new MemoryStream(jpeg)) {
+                memStream.Position = 0;
+
+                JpegBitmapDecoder decoder = new JpegBitmapDecoder(memStream, BitmapCreateOptions.IgnoreColorProfile, BitmapCacheOption.OnLoad);
+
+                FormatConvertedBitmap bitmap = new FormatConvertedBitmap();
+                bitmap.BeginInit();
+                bitmap.Source = decoder.Frames[0];
+                bitmap.DestinationFormat = System.Windows.Media.PixelFormats.Rgb48; // keep full colour, 16 bit/channel
+                bitmap.EndInit();
+
+                int width = bitmap.PixelWidth;
+                int height = bitmap.PixelHeight;
+                ushort[] rgb = new ushort[width * height * 3];
+                bitmap.CopyPixels(rgb, width * 3 * 2, 0);
+
+                ushort[] bayer = new ushort[width * height];
+                // RGGB: (evenRow,evenCol)=R  (evenRow,oddCol)=G  (oddRow,evenCol)=G  (oddRow,oddCol)=B
+                for (int y = 0; y < height; y++) {
+                    bool evenRow = (y % 2 == 0);
+                    int rowBase = y * width;
+                    int rgbRowBase = rowBase * 3;
+                    for (int x = 0; x < width; x++) {
+                        bool evenCol = (x % 2 == 0);
+                        int rgbIdx = rgbRowBase + x * 3;
+                        ushort value;
+                        if (evenRow && evenCol) {
+                            value = rgb[rgbIdx];       // R
+                        } else if (!evenRow && !evenCol) {
+                            value = rgb[rgbIdx + 2];   // B
+                        } else {
+                            value = rgb[rgbIdx + 1];   // G
+                        }
+                        bayer[rowBase + x] = value;
+                    }
+                }
+
+                return _exposureDataFactory.CreateImageArrayExposureData(
+                        input: bayer,
+                        width: width,
+                        height: height,
+                        bitDepth: 16,
+                        isBayered: true,
+                        metaData: metaData);
+            }
         }
 
         public void StopLiveView() {
@@ -1009,7 +1054,7 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
                     ret = LMX_func_api_ISO_Get_Capability(ref Iso_CapaInfo, out retError);
                     // Rebuild the cached lists from THIS connection's fresh capability data (a reconnect reuses
                     // the driver, and stale/empty caches left gain unpopulated).
-                    _gains = null; _gainsRaw = null; _ssTable = null; _exposures = null; _warnedJpeg = false;
+                    _gains = null; _gainsRaw = null; _ssTable = null; _exposures = null; _warnedJpeg = false; _warnedLibRaw = false;
 
                     // Warn (never block) about the exposure mode. Use the dedicated Get_Mode_Pos getter, not the
                     // CameraMode capability struct (whose Tether-buffer layout differs, so CurVal_mode_pos read
@@ -1051,7 +1096,7 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
             { "DC-S5", new CameraSpecs { Model = "DC-S5", Width = 6000, Height = 4000, PixelPitch = 5.94 } },
             { "DC-S5M2", new CameraSpecs { Model = "DC-S5M2", Width = 6000, Height = 4000, PixelPitch = 5.94 } },
             { "DC-S5M2X", new CameraSpecs { Model = "DC-S5M2X", Width = 6008, Height = 4008, PixelPitch = 5.94 } },
-            { "DC-S9", new CameraSpecs { Model = "DC-S9", Width = 8192, Height = 5464, PixelPitch = (17.3/8192)*1000} },
+            { "DC-S9", new CameraSpecs { Model = "DC-S9", Width = 6000, Height = 4000, PixelPitch = 5.94 } },      // 24 MP full frame (same sensor as S5 II)
             { "DC-BGH1", new CameraSpecs { Model = "DC-BGH1", Width = 3680, Height = 2760, PixelPitch = 4.68 } },
             { "DC-BGS1", new CameraSpecs { Model = "DC-BGS1", Width = 6000, Height = 4000, PixelPitch = 5.91 } },
             { "DC-GH6", new CameraSpecs { Model = "DC-GH6", Width = 5776 , Height = 4336, PixelPitch = 3 } },
@@ -1060,7 +1105,7 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
             { "DC-GH5S", new CameraSpecs { Model = "DC-GH5S", Width = 3680 , Height = 2760, PixelPitch = 4.68 } },
             { "DC-GH5M2", new CameraSpecs { Model = "GH5M2", Width = 5184, Height = 3888, PixelPitch = 3.33} },
             { "DC-G9", new CameraSpecs { Model = "DC-G9", Width = 5184, Height = 3888, PixelPitch = 3.33 } },
-            { "DC-G9M2", new CameraSpecs { Model = "DC-G9M2", Width = 5184, Height = 3888, PixelPitch = 3.33 } },
+            { "DC-G9M2", new CameraSpecs { Model = "DC-G9M2", Width = 5776, Height = 4336, PixelPitch = 3 } },     // 25 MP MFT (same sensor as GH7)
             { "DefaultLumix", new CameraSpecs { Model = "DefaultLumix", Width = 6000, Height = 4000, PixelPitch = 5.9 } }
         };
 
