@@ -514,32 +514,25 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
         public bool HasBattery => true;
 
         // ---- Battery ----
-        // NINA polls BatteryLevel on its device-update cycle, roughly every two seconds, and this body's
-        // property reads are not free — that cycle has already been seen overrunning its own interval. So the
-        // reading is cached and refreshed at most once every BATTERY_CACHE_SECONDS.
-        private const int BATTERY_CACHE_SECONDS = 20;
+        // Read ONCE, at connect, and never again. Not a cache with a timeout - no native call from the getter
+        // at all.
+        //
+        // Why: NINA asks for BatteryLevel from its device-update cycle and from metaData.FromCamera(this) on
+        // every frame and every live-view frame, so any native call in this getter lands in the middle of
+        // whatever the camera is doing. Twice on 2026-11-23 a refresh came back having written nothing - an
+        // all-zero buffer with err=0 - and the process died inside VCRUNTIME140 about a second later: at
+        // 16:15:33 during live view, and at 18:13:22 one second before a 120s bulb sub, taking a Target
+        // Scheduler session with it. Two for two. The first fix only suppressed the read during live view,
+        // which was too narrow.
+        //
+        // The cause is still unproven and a dump now exists to settle it. Until then the reading is not worth
+        // one native call in a hot path: the connect-time read has never once misbehaved, and a battery level
+        // that is 83 minutes stale is worth strictly more than a session.
         private int _batteryPercent = -1;
-        private DateTime _batteryReadAt = DateTime.MinValue;
         private uint _lastLoggedBatteryWord = uint.MaxValue;
 
-        // -1 is NINA's "unknown" — what every camera without a battery reports, and what we report rather than
-        // show a number we cannot justify. It used to be a hardcoded 100.
-        public int BatteryLevel {
-            get {
-                if (!Connected || !NativeBinding.ExtendedMode) { return -1; }
-                // Never read the battery while live view is streaming. NINA calls metaData.FromCamera(this) for
-                // every live-view frame, so this getter sits in that loop, and before this property did any work
-                // it was a hardcoded 100 — no native call at all. On 2026-11-23 at 16:15:33 a refresh that fell
-                // due mid-live-view came back having written nothing, the next live-view poll produced no frame,
-                // and the process died 1.1 s later. Cause unproven, but a property read competing with the
-                // live-view stream has no business being in that path: serve the cached value instead.
-                if (LiveViewEnabled) { return _batteryPercent; }
-                if ((DateTime.UtcNow - _batteryReadAt).TotalSeconds < BATTERY_CACHE_SECONDS) { return _batteryPercent; }
-                _batteryReadAt = DateTime.UtcNow;
-                _batteryPercent = ReadBatteryPercent();
-                return _batteryPercent;
-            }
-        }
+        // -1 is NINA's "unknown", which is what every camera without a battery reports.
+        public int BatteryLevel => _batteryPercent;
 
         private int ReadBatteryPercent() {
             if (!LumixCam.Ext_TryGetBatteryInfo(out uint level, out uint levelAlt, out uint head, out uint err, out string rawHead)) {
@@ -1112,6 +1105,8 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
                         LumixCam.LMX_func_api_SetupFilesConfig_Set_Target(saveTgt, out retError);
                         Logger.Info($"Save target set to {saveTgt} (0=SD,1=PC,2=PC+SD), err={retError}.");
                         ReportCardCapacity(saveTgt);
+                        // The one and only battery read of the session; see BatteryLevel for why.
+                        _batteryPercent = ReadBatteryPercent();
                     }
 
                     lumixCameras = new Dictionary<string, CameraSpecs>
