@@ -1,5 +1,16 @@
 ﻿# LumixCamera
 
+## 1.2.1.0
+- **A frame the camera cannot deliver no longer takes N.I.N.A. down with it.** An object
+  reported with no data used to complete the exposure as a success with nothing in it, and
+  nothing guarded the SDK's capture callback, so the process died outright. The frame now
+  fails as a capture error and the session carries on.
+- **The SD card is checked at connect.** When the save target writes to the card, the plugin
+  warns if the card is full, nearly full, missing, or cannot be read - and says which. On a
+  PC-only save target nothing is raised, because the card is not used.
+- **Battery level is reported for real** instead of always showing 100%. Unknown is reported
+  as unknown rather than guessed at.
+
 ## 1.2.0.0
 - Optional **LUMIX Tether extended mode**: when enabled in the plugin options the driver
   loads the DLL from a local install of Panasonic's free LUMIX Tether application (never
