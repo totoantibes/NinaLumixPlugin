@@ -487,7 +487,45 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
 
         public bool HasBattery => true;
 
-        public int BatteryLevel => 100; //hardcoded for now
+        // ---- Battery ----
+        // NINA polls BatteryLevel on its device-update cycle, roughly every two seconds, and this body's
+        // property reads are not free — that cycle has already been seen overrunning its own interval. So the
+        // reading is cached and refreshed at most once every BATTERY_CACHE_SECONDS.
+        private const int BATTERY_CACHE_SECONDS = 20;
+        private int _batteryPercent = -1;
+        private DateTime _batteryReadAt = DateTime.MinValue;
+        private uint _lastLoggedBatteryWord = uint.MaxValue;
+
+        // -1 is NINA's "unknown" — what every camera without a battery reports, and what we report rather than
+        // show a number we cannot justify. It used to be a hardcoded 100.
+        public int BatteryLevel {
+            get {
+                if (!Connected || !NativeBinding.ExtendedMode) { return -1; }
+                if ((DateTime.UtcNow - _batteryReadAt).TotalSeconds < BATTERY_CACHE_SECONDS) { return _batteryPercent; }
+                _batteryReadAt = DateTime.UtcNow;
+                _batteryPercent = ReadBatteryPercent();
+                return _batteryPercent;
+            }
+        }
+
+        private int ReadBatteryPercent() {
+            if (!LumixCam.Ext_TryGetBatteryInfo(out uint word, out uint err, out string rawHead)) {
+                Logger.Info($"[LumixBattery] the camera did not report battery info (err={err}, bytes={rawHead}).");
+                return -1;
+            }
+            if (word != _lastLoggedBatteryWord) {
+                _lastLoggedBatteryWord = word;
+                Logger.Info($"[LumixBattery] battery word=0x{word:X8} ({word}), bytes={rawHead}.");
+            }
+            // The encoding is undocumented. A plain 1-100 percentage is the reading this accepts; 0xFFFF and
+            // 0xFFFFFFFF are the usual "unknown or external power" fillers. Zero is treated as unknown too, not
+            // as an empty battery: a call that returns success without writing leaves the scratch zeroed, and a
+            // genuinely flat battery would have switched the body off rather than answered. Anything else cannot
+            // honestly be turned into a percentage, so it stays unknown — and every distinct word is logged
+            // above with its raw bytes, so the real encoding can be read straight off a session log.
+            if (word >= 1 && word <= 100) { return (int)word; }
+            return -1;
+        }
 
         public int BitDepth {
             get {

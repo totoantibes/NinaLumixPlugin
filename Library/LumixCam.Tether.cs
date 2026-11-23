@@ -175,8 +175,11 @@ namespace LumixWrapper {
         private static extern byte Ext_ImageInfo_GetImageQuality(out uint quality, IntPtr ctx, out uint retError);
         [DllImport(DLLNAME, EntryPoint = "LMX_func_api_ImageInfo_GetCapability", ExactSpelling = true, CallingConvention = cc)]
         private static extern byte Ext_ImageInfo_GetCapability(IntPtr buf, IntPtr ctx, out uint retError);
+        // Declared with the buffer shape and read through TryReadTetherWord, like the card calls below: this
+        // export is undocumented and had never actually been called, so there is no working behaviour here to
+        // preserve — only a signature nobody had tested.
         [DllImport(DLLNAME, EntryPoint = "LMX_func_api_GetBatteryInfo", ExactSpelling = true, CallingConvention = cc)]
-        private static extern byte Ext_GetBatteryInfo(out uint info, IntPtr ctx, out uint retError);
+        private static extern byte Ext_GetBatteryInfo(IntPtr buf, IntPtr ctx, out uint retError);
 
         // GH5S image-quality map (may vary per body): 0=Fine, 3=RAW, 4=RAW+Fine.
         public const uint IMGQ_JPEG_FINE = 0, IMGQ_RAW = 3, IMGQ_RAW_JPEG = 4;
@@ -189,8 +192,10 @@ namespace LumixWrapper {
         }
         public static byte Ext_GetImageQuality(out uint quality, out uint retError) =>
             Ext_ImageInfo_GetImageQuality(out quality, _tetherCtx, out retError);
-        public static byte Ext_GetBattery(out uint info, out uint retError) =>
-            Ext_GetBatteryInfo(out info, _tetherCtx, out retError);
+        /// <summary>Raw battery word as the Tether DLL reports it, or false when it will not say. The encoding
+        /// is undocumented, so the caller gets the raw bytes too and decides what is safe to show.</summary>
+        public static bool Ext_TryGetBatteryInfo(out uint info, out uint retError, out string rawHead) =>
+            TryReadTetherWord(TetherWord.BatteryInfo, out info, out retError, out rawHead);
 
         // ===================== Save destination (SetupFilesConfig target) =====================
         // 0=SD only (default), 1=PC only (cardless), 2=PC+SD. On capture with a PC target the camera fires
@@ -208,7 +213,7 @@ namespace LumixWrapper {
         public static byte LMX_func_api_SetupFilesConfig_Set_Target(ushort unParam, out uint retError) =>
             NativeBinding.ExtendedMode ? Ext_SetupFilesConfig_SetTarget(unParam, _tetherCtx, out retError) : Pub_SetupFilesConfig_Set_Target(unParam, out retError);
 
-        // ===================== Card capacity (extended only) =====================
+        // ===================== Card capacity and battery (extended only) =====================
         // The public SDK headers carry no storage call at all, but the Tether DLL exports several. Two are
         // useful here: how many more frames the card holds, and the per-card status. Both are undocumented,
         // so they are declared with the BUFFER shape (IntPtr, not `out uint`) and handed the 16 KB pinned
@@ -225,16 +230,16 @@ namespace LumixWrapper {
         /// a body without the call, or a refused call). The number is advisory: report it, never gate a capture
         /// on it.</summary>
         public static bool Ext_TryGetFreeSpaceInImages(out uint images, out uint retError, out string rawHead) =>
-            TryReadStorageWord(StorageCall.FreeSpaceInImages, out images, out retError, out rawHead);
+            TryReadTetherWord(TetherWord.FreeSpaceInImages, out images, out retError, out rawHead);
 
         /// <summary>Per-card status word as the Tether DLL reports it. Layout is undocumented; the raw bytes
         /// come back alongside so a log can pin it down.</summary>
         public static bool Ext_TryGetStatusOfCards(out uint status, out uint retError, out string rawHead) =>
-            TryReadStorageWord(StorageCall.StatusOfCards, out status, out retError, out rawHead);
+            TryReadTetherWord(TetherWord.StatusOfCards, out status, out retError, out rawHead);
 
-        private enum StorageCall { FreeSpaceInImages, StatusOfCards }
+        private enum TetherWord { FreeSpaceInImages, StatusOfCards, BatteryInfo }
 
-        private static bool TryReadStorageWord(StorageCall which, out uint value, out uint retError, out string rawHead) {
+        private static bool TryReadTetherWord(TetherWord which, out uint value, out uint retError, out string rawHead) {
             value = 0;
             retError = 0;
             rawHead = "";
@@ -242,11 +247,14 @@ namespace LumixWrapper {
             try {
                 EnsureTetherBuffers();
                 if (_capBuf == IntPtr.Zero || _capBacking == null) { return false; }
-                Array.Clear(_capBacking, 0, STORAGE_SCRATCH_BYTES);
-                byte r = which == StorageCall.FreeSpaceInImages
-                    ? Ext_GetFreeSpaceInImages(_capBuf, _tetherCtx, out retError)
-                    : Ext_GetStatusOfCards(_capBuf, _tetherCtx, out retError);
-                rawHead = BitConverter.ToString(_capBacking, 0, STORAGE_SCRATCH_BYTES);
+                Array.Clear(_capBacking, 0, TETHER_WORD_SCRATCH_BYTES);
+                byte r;
+                switch (which) {
+                    case TetherWord.FreeSpaceInImages: r = Ext_GetFreeSpaceInImages(_capBuf, _tetherCtx, out retError); break;
+                    case TetherWord.StatusOfCards: r = Ext_GetStatusOfCards(_capBuf, _tetherCtx, out retError); break;
+                    default: r = Ext_GetBatteryInfo(_capBuf, _tetherCtx, out retError); break;
+                }
+                rawHead = BitConverter.ToString(_capBacking, 0, TETHER_WORD_SCRATCH_BYTES);
                 if (r != LMX_BOOL_TRUE) { return false; }
                 value = (uint)(_capBacking[0] | (_capBacking[1] << 8) | (_capBacking[2] << 16) | (_capBacking[3] << 24));
                 return true;
@@ -255,7 +263,7 @@ namespace LumixWrapper {
             }
         }
 
-        private const int STORAGE_SCRATCH_BYTES = 16;
+        private const int TETHER_WORD_SCRATCH_BYTES = 16;
 
         // ===================== Extended connection (raw buffers + held context) =====================
         /// <summary>Enumerate cameras via the extended DLL. Returns model names (index-aligned).</summary>
