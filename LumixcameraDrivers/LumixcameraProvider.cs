@@ -49,6 +49,8 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
             try {
                 LumixCam.LMX_func_api_Init();
             } catch (Exception ex) {
+                // Was silently swallowed: a failed SDK init then showed up only as "Found 0 Lumix Cameras".
+                Logger.Error("Lumix: LMX_func_api_Init failed: " + ex);
             }
         }
 
@@ -58,7 +60,6 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
             var devices = new List<ICamera>();
             uint retError;
             LumixCam.LMX_CONNECT_DEVICE_INFO devInfo = new LumixCam.LMX_CONNECT_DEVICE_INFO();
-            uint ret;
 
             if (this.driver != null) {
                 try {
