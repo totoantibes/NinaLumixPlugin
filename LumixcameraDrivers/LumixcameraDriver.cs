@@ -957,8 +957,71 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
             }
         }
 
+        // ---- Live-view stop gate ----
+        // The SDK tears its own live-view buffers down inside Ctrl_LiveView_Stop, and the 16:15:33 full dump
+        // on 2026-11-23 caught one of its own worker threads memcpy'ing into a 1.4 MB region that was already
+        // MEM_FREE / PAGE_NOACCESS and outside every GC segment. We cannot stop the SDK racing itself, but we
+        // can stop US adding to the overlap: no read may start once a stop has begun, and a stop waits for the
+        // read already inside the DLL to come back out before it asks for the teardown.
+        //
+        // Latched deliberately: the flag is cleared by StartLiveView, never by StopLiveView, so a poller that
+        // was sleeping through the whole stop cannot wake up and call into a torn-down live view.
+        private readonly object _lvGate = new object();
+        private int _lvReadsInFlight;
+        private bool _lvStopping;
+
+        // A live-view read returns in milliseconds (it answers "no frame ready" immediately), so a drain that
+        // has not finished in this long means the call is wedged, not slow. Then we stop anyway: a hung stop
+        // would freeze whatever asked for it, and the log line says which case happened.
+        private const int LIVEVIEW_DRAIN_TIMEOUT_MS = 1500;
+
+        // Breathing room after the stop before the session itself is torn down, for the SDK's own live-view
+        // thread to finish whatever frame it was mid-delivery on. It narrows the window; it does not close it,
+        // because that thread is not ours to wait on.
+        private const int LIVEVIEW_STOP_SETTLE_MS = 250;
+
+        /// <summary>
+        /// Claims the right to call the SDK's live-view reader. False means a stop has begun and the caller
+        /// must not touch the DLL. Every true must be paired with <see cref="EndLiveViewRead"/>.
+        /// </summary>
+        private bool TryBeginLiveViewRead() {
+            lock (_lvGate) {
+                if (_lvStopping) { return false; }
+                _lvReadsInFlight++;
+                return true;
+            }
+        }
+
+        private void EndLiveViewRead() {
+            lock (_lvGate) {
+                _lvReadsInFlight--;
+                if (_lvReadsInFlight <= 0) { Monitor.PulseAll(_lvGate); }
+            }
+        }
+
+        /// <summary>
+        /// Latches live view as stopping and waits for in-flight reads to leave the DLL.
+        /// Returns false if the wait timed out, i.e. a read is still inside the SDK.
+        /// </summary>
+        private bool DrainLiveViewReads() {
+            lock (_lvGate) {
+                _lvStopping = true;
+                int deadline = Environment.TickCount + LIVEVIEW_DRAIN_TIMEOUT_MS;
+                while (_lvReadsInFlight > 0) {
+                    int remaining = deadline - Environment.TickCount;
+                    if (remaining <= 0) { return false; }
+                    Monitor.Wait(_lvGate, remaining);
+                }
+                return true;
+            }
+        }
+
         public void StartLiveView(CaptureSequence sequence) {
-            LMX_func_api_Ctrl_LiveView_Start(out retError);
+            lock (_lvGate) { _lvStopping = false; }
+            byte r = LMX_func_api_Ctrl_LiveView_Start(out uint lvErr);
+            // Start and stop were both silent before. The 16:15 log therefore could not say whether a stop had
+            // been issued at all, which is exactly what you need to know about a teardown race.
+            Logger.Info($"[Lumix] live view start: ret={r} err=0x{lvErr:X8}");
             LiveViewEnabled = true;
         }
 
@@ -979,22 +1042,33 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
                 // DLL, and nothing has been shown about its buffer lifetime either way.
                 bool pinnedPath = NativeBinding.ExtendedMode;
                 byte[] lvFallback = pinnedPath ? null : new byte[LMX_DEF_LIVEVIEW_STREAMDATA_SIZE_MAX];
-                byte[] block;
-                int jpegAt;
-                uint returnedJpegSize;
+                byte[] block = null;
+                int jpegAt = 0;
+                uint returnedJpegSize = 0;
                 while (true) {
                     token.ThrowIfCancellationRequested();
-                    byte r;
-                    if (pinnedPath) {
-                        jpegAt = LumixCam.LiveViewJpegOffset;
-                        r = LumixCam.Ext_TryGetLiveViewData(out block, out returnedJpegSize, out retError) ? (byte)LMX_BOOL_TRUE : (byte)0;
-                    } else {
-                        LMX_STRUCT_LIVEVIEW_INFO_HISTGRAM histgramBuf = new LMX_STRUCT_LIVEVIEW_INFO_HISTGRAM();
-                        LMX_STRUCT_LIVEVIEW_INFO_POSTURE postureBuf = new LMX_STRUCT_LIVEVIEW_INFO_POSTURE();
-                        LMX_STRUCT_LIVEVIEW_INFO_LEVEL levelBuf = new LMX_STRUCT_LIVEVIEW_INFO_LEVEL();
-                        block = lvFallback;
-                        jpegAt = 0;
-                        r = LMX_func_api_Get_LiveView_data(ref histgramBuf, out _, ref postureBuf, out _, ref levelBuf, out _, ref lvFallback[0], out returnedJpegSize, out retError);
+                    byte r = 0;
+                    // Hold the stop off for the duration of the native call, and refuse to make one at all once
+                    // a stop has begun. NINA cancels the token and calls StopLiveView, in that order, so the
+                    // throw below is the path for a stop that arrives first - which NINA already handles,
+                    // because a cancelled download is how live view ends every time.
+                    if (!TryBeginLiveViewRead()) {
+                        throw new OperationCanceledException("Lumix: live view was stopped while waiting for a frame.");
+                    }
+                    try {
+                        if (pinnedPath) {
+                            jpegAt = LumixCam.LiveViewJpegOffset;
+                            r = LumixCam.Ext_TryGetLiveViewData(out block, out returnedJpegSize, out retError) ? (byte)LMX_BOOL_TRUE : (byte)0;
+                        } else {
+                            LMX_STRUCT_LIVEVIEW_INFO_HISTGRAM histgramBuf = new LMX_STRUCT_LIVEVIEW_INFO_HISTGRAM();
+                            LMX_STRUCT_LIVEVIEW_INFO_POSTURE postureBuf = new LMX_STRUCT_LIVEVIEW_INFO_POSTURE();
+                            LMX_STRUCT_LIVEVIEW_INFO_LEVEL levelBuf = new LMX_STRUCT_LIVEVIEW_INFO_LEVEL();
+                            block = lvFallback;
+                            jpegAt = 0;
+                            r = LMX_func_api_Get_LiveView_data(ref histgramBuf, out _, ref postureBuf, out _, ref levelBuf, out _, ref lvFallback[0], out returnedJpegSize, out retError);
+                        }
+                    } finally {
+                        EndLiveViewRead();
                     }
                     if (r == LMX_BOOL_TRUE && block != null && returnedJpegSize > 4
                         && jpegAt + returnedJpegSize <= block.Length
@@ -1076,7 +1150,12 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
         }
 
         public void StopLiveView() {
-            LMX_func_api_Ctrl_LiveView_Stop(out retError);
+            // Drain before the teardown, never after. Safe to call twice: the second drain returns at once.
+            if (!DrainLiveViewReads()) {
+                Logger.Warning($"[Lumix] live view stop: a read was still inside the SDK after {LIVEVIEW_DRAIN_TIMEOUT_MS}ms; stopping anyway.");
+            }
+            byte r = LMX_func_api_Ctrl_LiveView_Stop(out uint lvErr);
+            Logger.Info($"[Lumix] live view stop: ret={r} err=0x{lvErr:X8}");
             LiveViewEnabled = false;
         }
 
@@ -1207,6 +1286,14 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
             // responsive. Each step is logged so the last line before it stops shows which call stalls.
             Task.Run(() => {
                 try {
+                    // Live view first. Disconnect used to go straight to Delete_CallBackInfo and CloseSession
+                    // with the SDK's live-view thread still running and still writing into session memory the
+                    // close was about to release - the same shape as the use-after-free the 16:15 dump caught.
+                    if (LiveViewEnabled) {
+                        Logger.Info("[Lumix] Disconnect: stopping live view before teardown");
+                        StopLiveView();
+                        System.Threading.Thread.Sleep(LIVEVIEW_STOP_SETTLE_MS);
+                    }
                     Logger.Info("[Lumix] Disconnect: delete callbacks");
                     LumixCam.LMX_func_api_Delete_CallBackInfo((uint)Lmx_event_id.LMX_DEF_LIB_EVENT_ID_OBJCT_ADD);
                     LumixCam.LMX_func_api_Delete_CallBackInfo((uint)Lmx_event_id.LMX_DEF_LIB_EVENT_ID_OBJCT_REQ_TRNSFER);
