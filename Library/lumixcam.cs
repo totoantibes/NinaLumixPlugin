@@ -1296,7 +1296,7 @@ namespace LumixWrapper {
         //
         // The extern keeps its signature and becomes private; the public wrapper keeps the
         // original name, so no call site changes.
-        [DllImport(DLLNAME, ExactSpelling = true, CallingConvention = cc)]
+        [DllImport(DLLNAME, EntryPoint = "LMX_func_api_Init", ExactSpelling = true, CallingConvention = cc)]
         private static extern void Raw_LMX_func_api_Init();
         public static void LMX_func_api_Init() {
             lock (_sdkGate) { Raw_LMX_func_api_Init(); }
@@ -1314,7 +1314,7 @@ namespace LumixWrapper {
         // Remarks  :
         //
         //
-        [DllImport(DLLNAME, ExactSpelling = true, CallingConvention = cc)]
+        [DllImport(DLLNAME, EntryPoint = "LMX_func_api_Close_Device", ExactSpelling = true, CallingConvention = cc)]
         private static extern byte Raw_LMX_func_api_Close_Device(out uint retError);
         public static byte LMX_func_api_Close_Device(out uint retError) {
             lock (_sdkGate) { return Raw_LMX_func_api_Close_Device(out retError); }
@@ -1332,7 +1332,7 @@ namespace LumixWrapper {
         //          byte       LMX_BOOL_TRUE :Acquisition success
         //                      LMX_BOOL_FALSE:Acquisition failure
         //
-        [DllImport(DLLNAME, ExactSpelling = true, CallingConvention = cc)]
+        [DllImport(DLLNAME, EntryPoint = "LMX_func_api_Get_PnPDeviceInfo", ExactSpelling = true, CallingConvention = cc)]
         private static extern byte Raw_LMX_func_api_Get_PnPDeviceInfo(ref LMX_CONNECT_DEVICE_INFO plmxPnpDevInfo, out uint retError);
         public static byte LMX_func_api_Get_PnPDeviceInfo(ref LMX_CONNECT_DEVICE_INFO plmxPnpDevInfo, out uint retError) {
             lock (_sdkGate) { return Raw_LMX_func_api_Get_PnPDeviceInfo(ref plmxPnpDevInfo, out retError); }
@@ -1351,7 +1351,7 @@ namespace LumixWrapper {
         //          byte       LMX_BOOL_TRUE :Acquisition success
         //                      LMX_BOOL_FALSE:Acquisition failure
         //
-        [DllImport(DLLNAME, ExactSpelling = true, CallingConvention = cc)]
+        [DllImport(DLLNAME, EntryPoint = "LMX_func_api_Select_PnPDevice", ExactSpelling = true, CallingConvention = cc)]
         private static extern byte Raw_LMX_func_api_Select_PnPDevice(
             uint dwDevIndex,
             ref LMX_CONNECT_DEVICE_INFO plmxPnpDevInfo,
@@ -1376,14 +1376,14 @@ namespace LumixWrapper {
         public delegate int LMX_CALLBACK_FUNC(uint param1, uint param2);
 
         //--- Function for registering callback function ---//
-        [DllImport(DLLNAME, ExactSpelling = true, CallingConvention = CallingConvention.StdCall)]
+        [DllImport(DLLNAME, EntryPoint = "LMX_func_api_Reg_NotifyCallback", ExactSpelling = true, CallingConvention = CallingConvention.StdCall)]
         private static extern uint Raw_LMX_func_api_Reg_NotifyCallback(uint CallBackType, LMX_CALLBACK_FUNC appfunc);
         public static uint LMX_func_api_Reg_NotifyCallback(uint CallBackType, LMX_CALLBACK_FUNC appfunc) {
             lock (_sdkGate) { return Raw_LMX_func_api_Reg_NotifyCallback(CallBackType, appfunc); }
         }
 
         //--- Callback function registration deletion function ---//
-        [DllImport(DLLNAME, ExactSpelling = true, CallingConvention = CallingConvention.StdCall)]
+        [DllImport(DLLNAME, EntryPoint = "LMX_func_api_Delete_CallBackInfo", ExactSpelling = true, CallingConvention = CallingConvention.StdCall)]
         private static extern uint Raw_LMX_func_api_Delete_CallBackInfo(uint CallBackType);
 
         // The one native call that does NOT simply take the gate, because of re-entrancy.
@@ -1708,13 +1708,13 @@ namespace LumixWrapper {
         //
         // --- LmxOpenSession/LmxCloseSession ---//
         //
-        [DllImport(DLLNAME, ExactSpelling = true, CallingConvention = cc)]
+        [DllImport(DLLNAME, EntryPoint = "LMX_func_api_Open_Session", ExactSpelling = true, CallingConvention = cc)]
         private static extern byte Raw_LMX_func_api_Open_Session(uint ulConnectVer, out uint pulDeviceConnectVer, out uint retError);
         public static byte LMX_func_api_Open_Session(uint ulConnectVer, out uint pulDeviceConnectVer, out uint retError) {
             lock (_sdkGate) { return Raw_LMX_func_api_Open_Session(ulConnectVer, out pulDeviceConnectVer, out retError); }
         }
 
-        [DllImport(DLLNAME, ExactSpelling = true, CallingConvention = cc)]
+        [DllImport(DLLNAME, EntryPoint = "LMX_func_api_Close_Session", ExactSpelling = true, CallingConvention = cc)]
         private static extern byte Raw_LMX_func_api_Close_Session(out uint retError);
         public static byte LMX_func_api_Close_Session(out uint retError) {
             lock (_sdkGate) { return Raw_LMX_func_api_Close_Session(out retError); }
