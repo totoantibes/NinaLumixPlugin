@@ -35,6 +35,11 @@ using System.Runtime.InteropServices;
 public class NoUngated {
     public static List<string> PInvokes = new List<string>();
     public static List<string> Rows = new List<string>();
+    // P/Invokes that are themselves public. No method in this assembly calls them, which is why
+    // the caller scan reports no ungated path - but they are reachable from OUTSIDE the assembly
+    // without passing the gate. Reported so the guarantee is stated at its real strength: "no
+    // ungated caller exists", not "no ungated path is reachable".
+    public static List<string> PublicPInvokes = new List<string>();
 
     public static void Run(Assembly asm) {
         BindingFlags f = BindingFlags.Public | BindingFlags.NonPublic |
@@ -57,6 +62,7 @@ public class NoUngated {
                     string key = t.FullName + "::" + mi.Name;
                     native.Add(key);
                     PInvokes.Add(key + "   [" + lib + "]");
+                    if (mi.IsPublic) { PublicPInvokes.Add(t.Name + "." + mi.Name); }
                 }
             }
         }
@@ -144,8 +150,19 @@ if ($tryGate.Count) { $tryGate | ForEach-Object { '    ' + $_ } }
 ('callers with NO monitor       : ' + $ungated.Count)
 if ($ungated.Count) { $ungated | ForEach-Object { '    ' + $_ } }
 ''
+$pub = [NoUngated]::PublicPInvokes
+('P/Invokes that are public     : ' + $pub.Count + '   (callable from outside the assembly, bypassing the gate)')
+''
 if ($ungated.Count -eq 0) {
     'CONFIRMED: no method in the assembly reaches Lmxptpif.dll without taking the gate.'
+    if ($pub.Count) {
+        ''
+        ('LIMIT OF THIS GUARANTEE: ' + $pub.Count + ' of the P/Invokes are declared public. Nothing in')
+        'the plugin calls them - that is why the scan above is clean - but they are not private, so'
+        'they could be called from outside the assembly without the gate. Making them private is a'
+        'separate change; until then the claim is "no ungated caller exists", not "no ungated path'
+        'is reachable".'
+    }
     if ($tryGate.Count) {
         ('NOTE: ' + $tryGate.Count + ' use TryEnter with a timeout rather than blocking. That is')
         'deliberate where blocking could deadlock against the SDK''s own callback thread, but it'

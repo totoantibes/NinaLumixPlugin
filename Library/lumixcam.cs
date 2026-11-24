@@ -1234,10 +1234,21 @@ namespace LumixWrapper {
         // LiveView Stream Setting: Recommended Image quality List data structure
         //
         ////////////////////////////////////////////////
+        public const int LMX_DEF_LIVEVIEW_RECOM_IMG_LIST_MAX = 1024;
+
+        // The native struct ends with RecomImgQualityListData[1024], so it is 8196 bytes. Declaring
+        // the array as a single element made the managed struct 12 bytes, and
+        // LMX_func_api_LiveView_Str_Get_Recom_Img takes it by ref - so a call would have handed the
+        // SDK 12 bytes to write 8196 into. Nothing in the plugin calls it today, which is the only
+        // reason this never fired; it is fixed here rather than left as a trap for whoever wires up
+        // live-view quality selection.
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
         public struct LMX_STRUCT_LIVEVIEW_STR_RECOM_IMG {
             public UInt16 RecomImgQualityListCount;
             public UInt16 RecomImgQualityStructSize;
-            public LMX_STRUCT_LIVEVIEW_STR_TRANS_IMG RecomImgQualityListData; //[1024]
+
+            [MarshalAs(UnmanagedType.ByValArray, SizeConst = LMX_DEF_LIVEVIEW_RECOM_IMG_LIST_MAX)]
+            public LMX_STRUCT_LIVEVIEW_STR_TRANS_IMG[] RecomImgQualityListData;
         }
 
         public const uint LMX_DEF_LIVEVIEW_STREAMDATA_SIZE_MAX = 1 * 1024 * 1024;
@@ -1654,8 +1665,10 @@ namespace LumixWrapper {
         [DllImport(DLLNAME, EntryPoint = "LMX_func_api_Get_Object_FormatType", ExactSpelling = true, CallingConvention = cc)]
         private static extern byte Pub_Get_Object_FormatType(uint ObjHandle, out uint pFormatType, out uint retError);
 
+        // UINT64* pDataSize, per the header and the DLL's own 8-byte write. See the note on
+        // Ext_Get_Object_DataSize in LumixCam.Tether.cs.
         [DllImport(DLLNAME, EntryPoint = "LMX_func_api_Get_Object_DataSize", ExactSpelling = true, CallingConvention = cc)]
-        private static extern byte Pub_Get_Object_DataSize(uint ObjHandle, out uint pDataSize, out uint retError);
+        private static extern byte Pub_Get_Object_DataSize(uint ObjHandle, out ulong pDataSize, out uint retError);
 
         [DllImport(DLLNAME, EntryPoint = "LMX_func_api_Get_Object_FileName", ExactSpelling = true, CallingConvention = cc)]
         private static extern byte Pub_Get_Object_FileName(uint ObjHandle, ref LMX_STRUCT_PTP_ARRAY_STRING pFileName, out uint retError);

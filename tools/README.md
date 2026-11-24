@@ -43,3 +43,20 @@ pwsh -NoProfile -File tools/verify-entrypoints.ps1 -TetherDll <path-to-a-copy>
 ```
 
 The imaging PC has it at `C:\Program Files\Panasonic\LUMIX Tether\Lmxptpif.dll`.
+
+## verify-struct-sizes.ps1
+
+Compiles `native_layout.cpp` against the SDK headers in `Library/` with MSVC and compares every
+struct's real size with `Marshal.SizeOf` of the C# equivalent. A managed struct smaller than its
+native counterpart means the SDK writes past what the plugin allocated.
+
+It found `LMX_STRUCT_LIVEVIEW_STR_RECOM_IMG` at 12 managed bytes against 8196 native. It also
+guards a standing hazard: `LMX_lib_def.h` is wrapped in `#pragma pack(push, Old, 1)` while the C#
+structs declare no `Pack`, so their agreement is a property of the current field layouts, not of
+the design.
+
+## lumix-getobject-guard.ps1 (needs the camera)
+
+The one hardware probe here. Runs on the imaging PC under Windows PowerShell 5.1 with NINA
+closed, fires one frame, and checks on guarded native buffers whether `Get_Object_DataSize`
+writes 8 bytes (it does: `UINT64*`) and whether `Get_Object` stays inside `storeBufSize`.

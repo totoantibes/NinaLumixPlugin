@@ -104,8 +104,14 @@ namespace LumixWrapper {
         private static extern byte Ext_Get_Object(uint objHandle, ref byte lpStoreBuf, uint storeBufSize, IntPtr ctx, out uint retError);
         [DllImport(DLLNAME, EntryPoint = "LMX_func_api_Get_Object_FormatType", ExactSpelling = true, CallingConvention = cc)]
         private static extern byte Ext_Get_Object_FormatType(uint objHandle, out uint pFormatType, IntPtr ctx, out uint retError);
+        // pDataSize is a UINT64*, not a UINT32*. Panasonic's header says so:
+        //   UINT8 LMX_func_api_Get_Object_DataSize(UINT32 ObjHandle, UINT64* pDataSize, UINT32 *retError)
+        // and the Tether DLL's own code confirms it - at 0x180024DA0 it does "mov qword ptr [r14],0"
+        // through this pointer, an 8-byte write. Declared "out uint", the SDK wrote 4 bytes past a
+        // 4-byte destination on every exposure, from inside the capture callback. It is the only
+        // UINT64* in the whole 84-prototype API, which is how it survived this long.
         [DllImport(DLLNAME, EntryPoint = "LMX_func_api_Get_Object_DataSize", ExactSpelling = true, CallingConvention = cc)]
-        private static extern byte Ext_Get_Object_DataSize(uint objHandle, out uint pDataSize, IntPtr ctx, out uint retError);
+        private static extern byte Ext_Get_Object_DataSize(uint objHandle, out ulong pDataSize, IntPtr ctx, out uint retError);
         [DllImport(DLLNAME, EntryPoint = "LMX_func_api_Get_Object_FileName", ExactSpelling = true, CallingConvention = cc)]
         private static extern byte Ext_Get_Object_FileName(uint objHandle, ref LMX_STRUCT_PTP_ARRAY_STRING pFileName, IntPtr ctx, out uint retError);
         [DllImport(DLLNAME, EntryPoint = "LMX_func_api_Skip_Object_Transfer", ExactSpelling = true, CallingConvention = cc)]
@@ -158,7 +164,7 @@ namespace LumixWrapper {
                 return NativeBinding.ExtendedMode ? Ext_Get_Object_FormatType(objHandle, out pFormatType, _tetherCtx, out retError) : Pub_Get_Object_FormatType(objHandle, out pFormatType, out retError);
             }
         }
-        public static byte LMX_func_api_Get_Object_DataSize(uint objHandle, out uint pDataSize, out uint retError) {
+        public static byte LMX_func_api_Get_Object_DataSize(uint objHandle, out ulong pDataSize, out uint retError) {
             lock (_sdkGate) {
                 return NativeBinding.ExtendedMode ? Ext_Get_Object_DataSize(objHandle, out pDataSize, _tetherCtx, out retError) : Pub_Get_Object_DataSize(objHandle, out pDataSize, out retError);
             }
