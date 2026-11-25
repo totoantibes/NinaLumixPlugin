@@ -1,5 +1,32 @@
 ﻿# LumixCamera
 
+## 1.3.1.0
+- **The crash that took N.I.N.A. down mid-session is fixed, and the cause is now proven rather
+  than guessed.** Panasonic's Tether DLL is not thread-safe on one session context: two
+  overlapping calls deadlock it, and a single call landing inside an image transfer makes that
+  transfer fail while leaving it outstanding. The DLL then completes the abandoned transfer one
+  to two minutes later, writing a full frame into memory it has already released - which
+  corrupts whatever now owns it and kills the process somewhere unrelated. Five sessions died
+  this way on 23-24 November. Every native call now goes through one gate, so the plugin can no
+  longer provoke it. The mechanism is reproducible on demand with the probes in `tools/`; the
+  full analysis is in `docs/crash-analysis-2026-11-24.md`.
+- **The battery reading is back.** 1.3.0.0 removed it because a refresh from N.I.N.A.'s
+  2-second device poll was landing inside image transfers. It is now refreshed at an idle point
+  in the capture cycle instead - at most once every five minutes, never during live view, and
+  skipped if the SDK is busy - so the reading is at most five minutes stale instead of frozen at
+  its connect-time value. Extended (LUMIX Tether) mode only: the public SDK has no battery
+  function to call.
+- **Buffers handed to the SDK are no longer collectible.** The object transfer and all four
+  live-view destinations now come from permanently pinned native memory rather than fresh
+  managed arrays, because `ref array[0]` pins only for the duration of the call and this SDK
+  writes to buffers after the call has returned.
+- **Live view shuts down without racing itself.** Stopping live view now waits for an in-flight
+  read to come back out of the DLL before asking for the teardown, and disconnecting stops live
+  view first and settles before touching the session. Start and stop are logged with their
+  result, which they were not.
+- **SDK error codes are decoded in the log.** `err=262147` was unreadable and is what made the
+  23 November failure hard to follow; the log now names the condition.
+
 ## 1.3.0.0
 - **A frame the camera cannot deliver no longer takes N.I.N.A. down with it.** An object
   reported with no data used to complete the exposure as a success with nothing in it, and
