@@ -1,4 +1,4 @@
-﻿using NINA.Core.Enum;
+using NINA.Core.Enum;
 using NINA.ViewModel;
 using NINA.Core.Model.Equipment;
 using NINA.Core.Utility;
@@ -235,15 +235,18 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
             // process only the first so we don't download twice.
             if (_downloadExposure == null || _downloadExposure.Task.IsCompleted) { return; }
             uint formatType;
-            uint dataSize;
+            // 64-bit, because that is what the SDK writes through this pointer. It stays 64-bit
+            // until the size has been bounded below, so a garbage high half is caught rather than
+            // silently truncated into a plausible-looking 32-bit length.
+            ulong dataSize64;
             LMX_STRUCT_PTP_ARRAY_STRING fileNameArrStr = new LMX_STRUCT_PTP_ARRAY_STRING();
 
             LMX_func_api_Get_Object_FormatType(cb_event_param, out formatType, out retError);
-            LMX_func_api_Get_Object_DataSize(cb_event_param, out dataSize, out retError);
+            LMX_func_api_Get_Object_DataSize(cb_event_param, out dataSize64, out retError);
             LMX_func_api_Get_Object_FileName(cb_event_param, ref fileNameArrStr, out retError);
             _lastFormat = formatType;
-            Logger.Info($"[LumixCapture] object=0x{cb_event_param:X} format=0x{formatType:X} size={dataSize}");
-            if (dataSize == 0) {
+            Logger.Info($"[LumixCapture] object=0x{cb_event_param:X} format=0x{formatType:X} size={dataSize64}");
+            if (dataSize64 == 0) {
                 // The camera raised a transfer event for an object that holds no data. Seen when the SD card is
                 // full and the save target includes SD: the card write has nowhere to go, so the frame never
                 // exists. This used to call TrySetResult(null) — completing the exposure as a SUCCESS with no
@@ -253,19 +256,35 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
                 FailExposure("The camera reported a frame with no data." + DescribeCardForFailure());
                 return;
             }
-            if (dataSize > MAX_OBJECT_BYTES) {
+            if (dataSize64 > MAX_OBJECT_BYTES) {
                 // Allocating a garbage size would throw OutOfMemory inside this native callback — the one place
                 // an exception must not be raised. Refuse the object instead of trying to hold it.
-                Logger.Warning($"[LumixCapture] object size {dataSize} exceeds the {MAX_OBJECT_BYTES} byte limit for a still frame — refusing to allocate; failing this frame.");
+                Logger.Warning($"[LumixCapture] object size {dataSize64} exceeds the {MAX_OBJECT_BYTES} byte limit for a still frame — refusing to allocate; failing this frame.");
                 ReleasePendingTransfer(cb_event_param);
-                FailExposure($"The camera reported an implausible frame size of {dataSize} bytes.");
+                FailExposure($"The camera reported an implausible frame size of {dataSize64} bytes.");
                 return;
             }
-            buffer = new byte[dataSize];
+            // Safe: bounded by MAX_OBJECT_BYTES (256 MB) immediately above.
+            uint dataSize = (uint)dataSize64;
+
+            // Transfer into the session-lived pinned buffer, never into a fresh managed array. `ref array[0]`
+            // pins only for the duration of the call, and this SDK writes to buffers after the call returns —
+            // see TryGetObjectBuffer for the evidence. A collectible destination here would be the capture-path
+            // twin of the live-view use-after-free.
+            //
+            // `buffer` is deliberately NOT allocated here any more. It is allocated below, after the header
+            // check, and only for a frame that proved usable — see the copy-out comment there for why NINA
+            // cannot be handed the shared transfer buffer itself.
+            if (!LumixCam.TryGetObjectBuffer(dataSize, out byte[] xfer)) {
+                Logger.Warning($"[LumixCapture] could not obtain a {dataSize}-byte transfer buffer; failing this frame.");
+                ReleasePendingTransfer(cb_event_param);
+                FailExposure($"Could not allocate a {dataSize}-byte buffer for the frame.");
+                return;
+            }
             byte gr = 0;
-            try { gr = LMX_func_api_Get_Object(cb_event_param, ref buffer[0], dataSize, out retError); } catch (Exception ex) { Logger.Error("[LumixCapture] Get_Object threw: " + ex); }
+            try { gr = LMX_func_api_Get_Object(cb_event_param, ref xfer[0], dataSize, out retError); } catch (Exception ex) { Logger.Error("[LumixCapture] Get_Object threw: " + ex); }
             if (dataSize >= 4) {
-                Logger.Info($"[LumixCapture] Get_Object ret={gr} err={retError}; magic={buffer[0]:X2} {buffer[1]:X2} {buffer[2]:X2} {buffer[3]:X2}");
+                Logger.Info($"[LumixCapture] Get_Object ret={gr} err={retError}; magic={xfer[0]:X2} {xfer[1]:X2} {xfer[2]:X2} {xfer[3]:X2}");
             }
 
             // Guard against a bogus object. On the first frame of a session the camera can fire an OBJCT event
@@ -273,11 +292,19 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
             // (observed as format 0x3, 128 KB). Forwarding that to NINA makes LibRaw throw "not a RAW file". Only
             // complete the download once we've actually pulled a recognisable image; otherwise ignore this object
             // and keep awaiting the real frame — the valid RW2/JPEG arrives on the next OBJCT event.
-            if (gr != LMX_BOOL_TRUE || !IsKnownImageHeader(buffer, dataSize)) {
+            if (gr != LMX_BOOL_TRUE || !IsKnownImageHeader(xfer, dataSize)) {
                 Logger.Warning($"[LumixCapture] object 0x{cb_event_param:X} is not a usable image (ret={gr}, format=0x{formatType:X}, size={dataSize}) — ignoring, waiting for the real frame.");
                 ReleasePendingTransfer(cb_event_param);
                 return;   // do NOT complete the exposure with junk data
             }
+
+            // Only now that the frame is known good, copy it out of the shared transfer buffer. NINA keeps these
+            // bytes well past this method — it decodes them and writes the .RW2 from them on its own threads —
+            // so it cannot be handed the buffer itself: the next frame would overwrite it mid-save. The copy is
+            // a few milliseconds against a download of a few hundred, and the array it produces is never seen
+            // by native code, so it is free to move or be collected.
+            buffer = new byte[dataSize];
+            Buffer.BlockCopy(xfer, 0, buffer, 0, (int)dataSize);
 
             _downloadExposure.TrySetResult(null);
             return;
@@ -511,38 +538,94 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
             }
         }
 
-        public bool HasBattery => true;
+        // Only the Tether DLL can answer this. Checked against both export tables: the bundled public SDK
+        // (85 exports) has zero battery-related exports, and LMX_func_api_GetBatteryInfo exists only in the
+        // Tether DLL. So in Standard mode there is nothing to ask, and NINA should not show a battery
+        // indicator it can never fill. NativeBinding.Initialize settles the mode before the first P/Invoke,
+        // so this is stable by the time NINA reads it.
+        public bool HasBattery => NativeBinding.ExtendedMode;
 
         // ---- Battery ----
-        // NINA polls BatteryLevel on its device-update cycle, roughly every two seconds, and this body's
-        // property reads are not free — that cycle has already been seen overrunning its own interval. So the
-        // reading is cached and refreshed at most once every BATTERY_CACHE_SECONDS.
-        private const int BATTERY_CACHE_SECONDS = 20;
+        // The getter is a plain field read - no native call, ever. The reading behind it is refreshed only
+        // from an idle point in the capture cycle, never from NINA's polling.
+        //
+        // Why the getter cannot touch the SDK: NINA asks for BatteryLevel from its 2s device-update cycle and
+        // from metaData.FromCamera(this) on every frame and every live-view frame, so a native call here lands
+        // wherever the camera happens to be - including inside an image transfer. That is what killed five
+        // sessions on 2026-11-23/24.
+        //
+        // What the dumps showed (processes 3784 and 13588, both captured): the SDK finishes an ABANDONED
+        // transfer 141s and 82s after the plugin's Get_Object for that frame has already returned, with a
+        // memcpy of the full frame into a native buffer it has itself freed - on a thread it owns, with no
+        // managed or plugin frame anywhere on the stack. The copy dies 7,968 bytes in, when it runs off the
+        // short mapped prefix that is left. Everything it wrote before that landed on whatever had taken that
+        // address: that is the heap corruption, and the later crashes in unrelated code are its victims.
+        //
+        // The battery read did not corrupt anything itself. In both dumps it was REFUSED - err=0 with an
+        // all-zero scratch - in the same millisecond that Get_Object returned 0 with a zero-filled buffer.
+        // Two requests bouncing together is the signature of a channel that already had two users: the read
+        // was issued from NINA's timer while the SDK was mid-transfer. The corrupting write is inside
+        // Panasonic's DLL and nothing here can make it safe, so keeping a second request off the channel
+        // during a transfer is the whole defence.
+        //
+        // Hence the refresh below, which runs at the top of StartExposure: the previous frame has been
+        // downloaded and the next shutter has not fired. Two other reads already live at that point - the
+        // exposure-mode poll and the card-capacity read - and neither has ever been implicated, across
+        // sessions of up to 234 frames. The interval keeps this to a handful of reads a night instead of one
+        // per NINA poll, and the read gives up rather than wait if the gate is busy.
+        private static readonly TimeSpan BATTERY_REFRESH_INTERVAL = TimeSpan.FromMinutes(5);
+        private DateTime _lastBatteryRefreshUtc = DateTime.MinValue;
         private int _batteryPercent = -1;
-        private DateTime _batteryReadAt = DateTime.MinValue;
         private uint _lastLoggedBatteryWord = uint.MaxValue;
 
-        // -1 is NINA's "unknown" — what every camera without a battery reports, and what we report rather than
-        // show a number we cannot justify. It used to be a hardcoded 100.
-        public int BatteryLevel {
-            get {
-                if (!Connected || !NativeBinding.ExtendedMode) { return -1; }
-                // Never read the battery while live view is streaming. NINA calls metaData.FromCamera(this) for
-                // every live-view frame, so this getter sits in that loop, and before this property did any work
-                // it was a hardcoded 100 — no native call at all. On 2026-11-23 at 16:15:33 a refresh that fell
-                // due mid-live-view came back having written nothing, the next live-view poll produced no frame,
-                // and the process died 1.1 s later. Cause unproven, but a property read competing with the
-                // live-view stream has no business being in that path: serve the cached value instead.
-                if (LiveViewEnabled) { return _batteryPercent; }
-                if ((DateTime.UtcNow - _batteryReadAt).TotalSeconds < BATTERY_CACHE_SECONDS) { return _batteryPercent; }
-                _batteryReadAt = DateTime.UtcNow;
-                _batteryPercent = ReadBatteryPercent();
-                return _batteryPercent;
-            }
+        // -1 is NINA's "unknown", which is what every camera without a battery reports.
+        public int BatteryLevel => _batteryPercent;
+
+        // Blocking read, for connect only: there is nothing else on the channel then, and the first reading
+        // should not be skipped.
+        private int ReadBatteryPercent() {
+            // Standard mode has no battery function to call, so report unknown without pretending the camera
+            // was asked and declined to answer. See HasBattery.
+            if (!NativeBinding.ExtendedMode) { return -1; }
+            bool ok = LumixCam.Ext_TryGetBatteryInfo(out uint level, out uint levelAlt, out uint head, out uint err, out string rawHead);
+            return InterpretBatteryReading(ok, level, levelAlt, head, err, rawHead);
         }
 
-        private int ReadBatteryPercent() {
-            if (!LumixCam.Ext_TryGetBatteryInfo(out uint level, out uint levelAlt, out uint head, out uint err, out string rawHead)) {
+        // Refresh from an idle point in the capture cycle; see the policy note above BatteryLevel for why it
+        // may not be done anywhere else. `idleOnEntry` is captured by the caller BEFORE it cancels an exposure
+        // that is still running, because a cancelled exposure can leave a transfer outstanding and this must
+        // not put a second request on the channel while one is.
+        private void MaybeRefreshBatteryAtIdle(bool idleOnEntry) {
+            // Standard mode first: without this the refresh would take the gate and log a failure every five
+            // minutes for a function the public SDK does not export. See HasBattery.
+            if (!NativeBinding.ExtendedMode) { return; }
+            if (!idleOnEntry || _liveViewEnabled) { return; }
+            if (DateTime.UtcNow - _lastBatteryRefreshUtc < BATTERY_REFRESH_INTERVAL) { return; }
+
+            bool ok = LumixCam.Ext_TryGetBatteryInfoIfFree(out uint level, out uint levelAlt, out uint head,
+                                                           out uint err, out string rawHead, out bool gateBusy);
+            if (gateBusy) {
+                // Something else holds the SDK gate, so no request was issued and the previous reading stands.
+                // The interval is deliberately NOT reset: the next exposure retries instead of waiting out
+                // another five minutes for a reading that was never attempted.
+                Logger.Debug("[LumixBattery] the SDK was busy; skipping this refresh.");
+                return;
+            }
+            _lastBatteryRefreshUtc = DateTime.UtcNow;
+            _batteryPercent = InterpretBatteryReading(ok, level, levelAlt, head, err, rawHead);
+
+            // One line per refresh, unconditionally. The detailed line in InterpretBatteryReading fires only
+            // when the value changes, which was right when the getter was called thousands of times a session
+            // but hides the mechanism now that reads are throttled: a session on mains, or on a battery that
+            // stays at 100, would log one battery line at connect and nothing afterwards, leaving no way to
+            // tell from the log whether the refresh ran at all. At this interval it is about a dozen lines a
+            // session, which is worth being able to see it working.
+            Logger.Info($"[LumixBattery] refreshed: {(_batteryPercent < 0 ? "unknown" : _batteryPercent.ToString() + "%")}" +
+                        $"; next no sooner than {BATTERY_REFRESH_INTERVAL.TotalMinutes:0} min from now.");
+        }
+
+        private int InterpretBatteryReading(bool ok, uint level, uint levelAlt, uint head, uint err, string rawHead) {
+            if (!ok) {
                 Logger.Info($"[LumixBattery] the camera did not report battery info (err={LumixError.Describe(err)}, bytes={rawHead}).");
                 return -1;
             }
@@ -751,6 +834,10 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
 
         public void StartExposure(CaptureSequence sequence) {
             if (Connected) {
+                // Captured before the cancellation below, and used only by the battery refresh: an exposure
+                // that gets cancelled here can leave a transfer outstanding, and that is exactly when a second
+                // request must not go on the channel.
+                bool idleOnEntry = _downloadExposure == null || _downloadExposure.Task.Status > TaskStatus.Running;
                 if (_recheckCardCapacity) {
                     // The previous frame came back empty. Re-read the card here, on NINA's thread, so the next
                     // failure message carries a current number instead of the one from connect.
@@ -763,6 +850,7 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
                     try { bulbCompletionCTS?.Cancel(); } catch { }
                     _downloadExposure.TrySetCanceled();
                 }
+                MaybeRefreshBatteryAtIdle(idleOnEntry);
                 LMX_STRUCT_REC_CTRL lmx_rec_ctrl = new LMX_STRUCT_REC_CTRL();
                 lmx_rec_ctrl.CtrlID = ((uint)Lmx_TagID_Rec_Ctrl_Release.LMX_DEF_LIB_TAG_REC_CTRL_RELEASE_ONESHOT);
                 lmx_rec_ctrl.ParamData.NumOfVal = 0;
@@ -949,8 +1037,71 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
             }
         }
 
+        // ---- Live-view stop gate ----
+        // The SDK tears its own live-view buffers down inside Ctrl_LiveView_Stop, and the 16:15:33 full dump
+        // on 2026-11-23 caught one of its own worker threads memcpy'ing into a 1.4 MB region that was already
+        // MEM_FREE / PAGE_NOACCESS and outside every GC segment. We cannot stop the SDK racing itself, but we
+        // can stop US adding to the overlap: no read may start once a stop has begun, and a stop waits for the
+        // read already inside the DLL to come back out before it asks for the teardown.
+        //
+        // Latched deliberately: the flag is cleared by StartLiveView, never by StopLiveView, so a poller that
+        // was sleeping through the whole stop cannot wake up and call into a torn-down live view.
+        private readonly object _lvGate = new object();
+        private int _lvReadsInFlight;
+        private bool _lvStopping;
+
+        // A live-view read returns in milliseconds (it answers "no frame ready" immediately), so a drain that
+        // has not finished in this long means the call is wedged, not slow. Then we stop anyway: a hung stop
+        // would freeze whatever asked for it, and the log line says which case happened.
+        private const int LIVEVIEW_DRAIN_TIMEOUT_MS = 1500;
+
+        // Breathing room after the stop before the session itself is torn down, for the SDK's own live-view
+        // thread to finish whatever frame it was mid-delivery on. It narrows the window; it does not close it,
+        // because that thread is not ours to wait on.
+        private const int LIVEVIEW_STOP_SETTLE_MS = 250;
+
+        /// <summary>
+        /// Claims the right to call the SDK's live-view reader. False means a stop has begun and the caller
+        /// must not touch the DLL. Every true must be paired with <see cref="EndLiveViewRead"/>.
+        /// </summary>
+        private bool TryBeginLiveViewRead() {
+            lock (_lvGate) {
+                if (_lvStopping) { return false; }
+                _lvReadsInFlight++;
+                return true;
+            }
+        }
+
+        private void EndLiveViewRead() {
+            lock (_lvGate) {
+                _lvReadsInFlight--;
+                if (_lvReadsInFlight <= 0) { Monitor.PulseAll(_lvGate); }
+            }
+        }
+
+        /// <summary>
+        /// Latches live view as stopping and waits for in-flight reads to leave the DLL.
+        /// Returns false if the wait timed out, i.e. a read is still inside the SDK.
+        /// </summary>
+        private bool DrainLiveViewReads() {
+            lock (_lvGate) {
+                _lvStopping = true;
+                int deadline = Environment.TickCount + LIVEVIEW_DRAIN_TIMEOUT_MS;
+                while (_lvReadsInFlight > 0) {
+                    int remaining = deadline - Environment.TickCount;
+                    if (remaining <= 0) { return false; }
+                    Monitor.Wait(_lvGate, remaining);
+                }
+                return true;
+            }
+        }
+
         public void StartLiveView(CaptureSequence sequence) {
-            LMX_func_api_Ctrl_LiveView_Start(out retError);
+            lock (_lvGate) { _lvStopping = false; }
+            byte r = LMX_func_api_Ctrl_LiveView_Start(out uint lvErr);
+            // Start and stop were both silent before. The 16:15 log therefore could not say whether a stop had
+            // been issued at all, which is exactly what you need to know about a teardown race.
+            Logger.Info($"[Lumix] live view start: ret={r} err=0x{lvErr:X8}");
             LiveViewEnabled = true;
         }
 
@@ -965,27 +1116,52 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
                 // buffer went to the JPEG decoder, so an empty poll meant decoding a zero-filled array: that
                 // throws WINCODEC_ERR_COMPONENTNOTFOUND, and because NINA's loop has no catch of its own the
                 // exception ended live view (observed 2026-11-23 16:15:33). Poll until a frame actually arrives.
-                byte[] jpegDataPos = new byte[LMX_DEF_LIVEVIEW_STREAMDATA_SIZE_MAX];
-                uint returnedJpegSize;
+                // In extended mode all four destinations come from one permanently pinned block — the JPEG and
+                // the three write-only info structs. Handing this SDK a `ref` to a local is what produced the
+                // use-after-free we proved from the 16:15 dump. Standard mode is unchanged: that is a different
+                // DLL, and nothing has been shown about its buffer lifetime either way.
+                bool pinnedPath = NativeBinding.ExtendedMode;
+                byte[] lvFallback = pinnedPath ? null : new byte[LMX_DEF_LIVEVIEW_STREAMDATA_SIZE_MAX];
+                byte[] block = null;
+                int jpegAt = 0;
+                uint returnedJpegSize = 0;
                 while (true) {
                     token.ThrowIfCancellationRequested();
-                    LMX_STRUCT_LIVEVIEW_INFO_HISTGRAM histgramBuf = new LMX_STRUCT_LIVEVIEW_INFO_HISTGRAM();
-                    uint histgramBufSize = LMX_DEF_LIVEVIEW_HISTGRAM_ELEMENT_SIZE;
-                    LMX_STRUCT_LIVEVIEW_INFO_POSTURE postureBuf = new LMX_STRUCT_LIVEVIEW_INFO_POSTURE();
-                    uint postureBufSize = 32;
-                    LMX_STRUCT_LIVEVIEW_INFO_LEVEL levelBuf = new LMX_STRUCT_LIVEVIEW_INFO_LEVEL();
-                    uint levelBufSize = 32;// sizeof(LMX_STRUCT_LIVEVIEW_INFO_LEVEL);
-                    byte r = LMX_func_api_Get_LiveView_data(ref histgramBuf, out histgramBufSize, ref postureBuf, out postureBufSize, ref levelBuf, out levelBufSize, ref jpegDataPos[0], out returnedJpegSize, out retError);
-                    if (r == LMX_BOOL_TRUE && returnedJpegSize > 4 && returnedJpegSize <= jpegDataPos.Length
-                        && jpegDataPos[0] == 0xFF && jpegDataPos[1] == 0xD8 && jpegDataPos[2] == 0xFF) {
+                    byte r = 0;
+                    // Hold the stop off for the duration of the native call, and refuse to make one at all once
+                    // a stop has begun. NINA cancels the token and calls StopLiveView, in that order, so the
+                    // throw below is the path for a stop that arrives first - which NINA already handles,
+                    // because a cancelled download is how live view ends every time.
+                    if (!TryBeginLiveViewRead()) {
+                        throw new OperationCanceledException("Lumix: live view was stopped while waiting for a frame.");
+                    }
+                    try {
+                        if (pinnedPath) {
+                            jpegAt = LumixCam.LiveViewJpegOffset;
+                            r = LumixCam.Ext_TryGetLiveViewData(out block, out returnedJpegSize, out retError) ? (byte)LMX_BOOL_TRUE : (byte)0;
+                        } else {
+                            LMX_STRUCT_LIVEVIEW_INFO_HISTGRAM histgramBuf = new LMX_STRUCT_LIVEVIEW_INFO_HISTGRAM();
+                            LMX_STRUCT_LIVEVIEW_INFO_POSTURE postureBuf = new LMX_STRUCT_LIVEVIEW_INFO_POSTURE();
+                            LMX_STRUCT_LIVEVIEW_INFO_LEVEL levelBuf = new LMX_STRUCT_LIVEVIEW_INFO_LEVEL();
+                            block = lvFallback;
+                            jpegAt = 0;
+                            r = LMX_func_api_Get_LiveView_data(ref histgramBuf, out _, ref postureBuf, out _, ref levelBuf, out _, ref lvFallback[0], out returnedJpegSize, out retError);
+                        }
+                    } finally {
+                        EndLiveViewRead();
+                    }
+                    if (r == LMX_BOOL_TRUE && block != null && returnedJpegSize > 4
+                        && jpegAt + returnedJpegSize <= block.Length
+                        && block[jpegAt] == 0xFF && block[jpegAt + 1] == 0xD8 && block[jpegAt + 2] == 0xFF) {
                         break;
                     }
                     System.Threading.Thread.Sleep(LIVEVIEW_EMPTY_POLL_WAIT_MS);
                 }
 
-                // Trim to the bytes the camera actually wrote; the rest of the buffer is stale or zero.
+                // Copy out the bytes the camera actually wrote. Required, not tidiness: on the pinned path the
+                // block is shared and the next frame overwrites it.
                 byte[] frame = new byte[returnedJpegSize];
-                Array.Copy(jpegDataPos, frame, (int)returnedJpegSize);
+                Buffer.BlockCopy(block, jpegAt, frame, 0, (int)returnedJpegSize);
 
                 var metaData = new ImageMetaData();
                 metaData.FromCamera(this);
@@ -1054,7 +1230,12 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
         }
 
         public void StopLiveView() {
-            LMX_func_api_Ctrl_LiveView_Stop(out retError);
+            // Drain before the teardown, never after. Safe to call twice: the second drain returns at once.
+            if (!DrainLiveViewReads()) {
+                Logger.Warning($"[Lumix] live view stop: a read was still inside the SDK after {LIVEVIEW_DRAIN_TIMEOUT_MS}ms; stopping anyway.");
+            }
+            byte r = LMX_func_api_Ctrl_LiveView_Stop(out uint lvErr);
+            Logger.Info($"[Lumix] live view stop: ret={r} err=0x{lvErr:X8}");
             LiveViewEnabled = false;
         }
 
@@ -1114,6 +1295,12 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
                         LumixCam.LMX_func_api_SetupFilesConfig_Set_Target(saveTgt, out retError);
                         Logger.Info($"Save target set to {saveTgt} (0=SD,1=PC,2=PC+SD), err={LumixError.Describe(retError)}.");
                         ReportCardCapacity(saveTgt);
+                        // The session's first battery read, taken here because the channel is quiet at connect.
+                        // It also starts the refresh interval, so the first exposure does not immediately read
+                        // again; after this the only reads are the throttled idle-point refreshes. See the
+                        // policy note above BatteryLevel.
+                        _batteryPercent = ReadBatteryPercent();
+                        _lastBatteryRefreshUtc = DateTime.UtcNow;
                     }
 
                     lumixCameras = new Dictionary<string, CameraSpecs>
@@ -1183,6 +1370,14 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
             // responsive. Each step is logged so the last line before it stops shows which call stalls.
             Task.Run(() => {
                 try {
+                    // Live view first. Disconnect used to go straight to Delete_CallBackInfo and CloseSession
+                    // with the SDK's live-view thread still running and still writing into session memory the
+                    // close was about to release - the same shape as the use-after-free the 16:15 dump caught.
+                    if (LiveViewEnabled) {
+                        Logger.Info("[Lumix] Disconnect: stopping live view before teardown");
+                        StopLiveView();
+                        System.Threading.Thread.Sleep(LIVEVIEW_STOP_SETTLE_MS);
+                    }
                     Logger.Info("[Lumix] Disconnect: delete callbacks");
                     LumixCam.LMX_func_api_Delete_CallBackInfo((uint)Lmx_event_id.LMX_DEF_LIB_EVENT_ID_OBJCT_ADD);
                     LumixCam.LMX_func_api_Delete_CallBackInfo((uint)Lmx_event_id.LMX_DEF_LIB_EVENT_ID_OBJCT_REQ_TRNSFER);
