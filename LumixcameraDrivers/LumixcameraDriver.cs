@@ -1,4 +1,4 @@
-﻿using NINA.Core.Enum;
+using NINA.Core.Enum;
 using NINA.ViewModel;
 using NINA.Core.Model.Equipment;
 using NINA.Core.Utility;
@@ -160,7 +160,7 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
             bool statusOk = LumixCam.Ext_TryGetStatusOfCards(out uint status, out uint statusErr, out string statusRaw);
             _lastKnownCardStatus = statusOk ? status : (uint?)null;
             if (!ok) {
-                Logger.Info($"[LumixCard] the camera did not report card capacity (err={spaceErr}, bytes={spaceRaw}; status err={statusErr}, bytes={statusRaw}).");
+                Logger.Info($"[LumixCard] the camera did not report card capacity (err={LumixError.Describe(spaceErr)}, bytes={spaceRaw}; status err={LumixError.Describe(statusErr)}, bytes={statusRaw}).");
                 _lastKnownCardFreeFrames = null;
                 return null;
             }
@@ -626,7 +626,7 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
 
         private int InterpretBatteryReading(bool ok, uint level, uint levelAlt, uint head, uint err, string rawHead) {
             if (!ok) {
-                Logger.Info($"[LumixBattery] the camera did not report battery info (err={err}, bytes={rawHead}).");
+                Logger.Info($"[LumixBattery] the camera did not report battery info (err={LumixError.Describe(err)}, bytes={rawHead}).");
                 return -1;
             }
             if (level != _lastLoggedBatteryWord) {
@@ -941,7 +941,9 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
                 if (ret != LMX_BOOL_TRUE) {
                     // Only a genuine failure (function returned not-TRUE). The old code warned whenever
                     // retError==1, which is an error CODE not a bool — that fired a false error on the first shot.
-                    Logger.Warning($"Single-shot release did not succeed (ret={ret}, err={retError}).");
+                    // Decoded, because the raw number is what made the 2026-11-23 failure unreadable: err=262147
+                    // was LMX_DEF_ERR_COM_DATA_RCV, a transport error - not the body refusing the shot.
+                    Logger.Warning($"Single-shot release did not succeed (ret={ret}, err={LumixError.Describe(retError)}).");
                 }
             }
         }
@@ -1291,7 +1293,7 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
                     if (NativeBinding.ExtendedMode) {
                         ushort saveTgt = (ushort)Properties.Settings.Default.SaveTarget;
                         LumixCam.LMX_func_api_SetupFilesConfig_Set_Target(saveTgt, out retError);
-                        Logger.Info($"Save target set to {saveTgt} (0=SD,1=PC,2=PC+SD), err={retError}.");
+                        Logger.Info($"Save target set to {saveTgt} (0=SD,1=PC,2=PC+SD), err={LumixError.Describe(retError)}.");
                         ReportCardCapacity(saveTgt);
                         // The session's first battery read, taken here because the channel is quiet at connect.
                         // It also starts the refresh interval, so the first exposure does not immediately read
