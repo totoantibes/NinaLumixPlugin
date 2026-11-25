@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Runtime.InteropServices;
 using Roberthasson.NINA.Lumixcamera;   // NativeBinding
 
@@ -17,6 +17,22 @@ namespace LumixWrapper {
     public unsafe partial class LumixCam {
 
         // ---- device context (filled by the extended connect, threaded into every extended op) ----
+        // One gate for every native call into Lmxptpif.dll.
+        //
+        // The Tether DLL keeps its session state in the single context buffer below, and that
+        // context is threaded into 30 entry points. Driving two of them at once wedges the DLL:
+        // measured on 2026-11-24 against a DC-GH5S, 2000 mixed read calls on one thread finished
+        // in 6.3s with zero failures, the same 2000 split across two threads deadlocked inside the
+        // DLL and never returned, and the same two threads with this lock finished in 6.8s with
+        // zero failures. That deadlock is the shape of NINA stalling 148s at 2026-11-24 02:05:51
+        // and 82s at 09:53:43, each time with a battery read and an image fetch logged in the same
+        // millisecond.
+        //
+        // Held for one native call only. The bulb hold is an await between two separate
+        // Rec_Ctrl_Release calls, so it never sits inside the gate; the longest hold is a
+        // Get_Object transfer, about 130ms, against a 2s device-poll interval.
+        private static readonly object _sdkGate = new object();
+        
         private static byte[] _ctxBacking;
         private static GCHandle _ctxPin;
         private static IntPtr _tetherCtx = IntPtr.Zero;
@@ -30,17 +46,19 @@ namespace LumixWrapper {
         private static IntPtr _devBuf = IntPtr.Zero;    // extended device-info buffer (array-max 64 layout)
 
         private static void EnsureTetherBuffers() {
-            if (_tetherCtx == IntPtr.Zero) {
-                _ctxBacking = new byte[8192]; _ctxPin = GCHandle.Alloc(_ctxBacking, GCHandleType.Pinned);
-                _tetherCtx = _ctxPin.AddrOfPinnedObject();
-            }
-            if (_capBuf == IntPtr.Zero) {
-                _capBacking = new byte[16384]; _capPin = GCHandle.Alloc(_capBacking, GCHandleType.Pinned);
-                _capBuf = _capPin.AddrOfPinnedObject();
-            }
-            if (_devBuf == IntPtr.Zero) {
-                _devBacking = new byte[262144]; _devPin = GCHandle.Alloc(_devBacking, GCHandleType.Pinned);
-                _devBuf = _devPin.AddrOfPinnedObject();
+            lock (_sdkGate) {
+                if (_tetherCtx == IntPtr.Zero) {
+                    _ctxBacking = new byte[8192]; _ctxPin = GCHandle.Alloc(_ctxBacking, GCHandleType.Pinned);
+                    _tetherCtx = _ctxPin.AddrOfPinnedObject();
+                }
+                if (_capBuf == IntPtr.Zero) {
+                    _capBacking = new byte[16384]; _capPin = GCHandle.Alloc(_capBacking, GCHandleType.Pinned);
+                    _capBuf = _capPin.AddrOfPinnedObject();
+                }
+                if (_devBuf == IntPtr.Zero) {
+                    _devBacking = new byte[262144]; _devPin = GCHandle.Alloc(_devBacking, GCHandleType.Pinned);
+                    _devBuf = _devPin.AddrOfPinnedObject();
+                }
             }
         }
 
@@ -86,8 +104,14 @@ namespace LumixWrapper {
         private static extern byte Ext_Get_Object(uint objHandle, ref byte lpStoreBuf, uint storeBufSize, IntPtr ctx, out uint retError);
         [DllImport(DLLNAME, EntryPoint = "LMX_func_api_Get_Object_FormatType", ExactSpelling = true, CallingConvention = cc)]
         private static extern byte Ext_Get_Object_FormatType(uint objHandle, out uint pFormatType, IntPtr ctx, out uint retError);
+        // pDataSize is a UINT64*, not a UINT32*. Panasonic's header says so:
+        //   UINT8 LMX_func_api_Get_Object_DataSize(UINT32 ObjHandle, UINT64* pDataSize, UINT32 *retError)
+        // and the Tether DLL's own code confirms it - at 0x180024DA0 it does "mov qword ptr [r14],0"
+        // through this pointer, an 8-byte write. Declared "out uint", the SDK wrote 4 bytes past a
+        // 4-byte destination on every exposure, from inside the capture callback. It is the only
+        // UINT64* in the whole 84-prototype API, which is how it survived this long.
         [DllImport(DLLNAME, EntryPoint = "LMX_func_api_Get_Object_DataSize", ExactSpelling = true, CallingConvention = cc)]
-        private static extern byte Ext_Get_Object_DataSize(uint objHandle, out uint pDataSize, IntPtr ctx, out uint retError);
+        private static extern byte Ext_Get_Object_DataSize(uint objHandle, out ulong pDataSize, IntPtr ctx, out uint retError);
         [DllImport(DLLNAME, EntryPoint = "LMX_func_api_Get_Object_FileName", ExactSpelling = true, CallingConvention = cc)]
         private static extern byte Ext_Get_Object_FileName(uint objHandle, ref LMX_STRUCT_PTP_ARRAY_STRING pFileName, IntPtr ctx, out uint retError);
         [DllImport(DLLNAME, EntryPoint = "LMX_func_api_Skip_Object_Transfer", ExactSpelling = true, CallingConvention = cc)]
@@ -105,67 +129,115 @@ namespace LumixWrapper {
             ref byte pJpeg, out uint pJpegSize, IntPtr ctx, out uint retError);
 
         // ===================== Public dispatchers (driver calls these unqualified names) =====================
-        public static byte LMX_func_api_SS_Get_Param(out int pulParam, out uint retError) =>
-            NativeBinding.ExtendedMode ? Ext_SS_GetParam(out pulParam, _tetherCtx, out retError) : Pub_SS_Get_Param(out pulParam, out retError);
-        public static byte LMX_func_api_SS_Set_Param(long ulParam, out uint retError) =>
-            NativeBinding.ExtendedMode ? Ext_SS_SetParam(ulParam, _tetherCtx, out retError) : Pub_SS_Set_Param(ulParam, out retError);
-        public static byte LMX_func_api_ISO_Get_Param(out uint pulParam, out uint retError) =>
-            NativeBinding.ExtendedMode ? Ext_ISO_GetParam(out pulParam, _tetherCtx, out retError) : Pub_ISO_Get_Param(out pulParam, out retError);
-        public static byte LMX_func_api_ISO_Set_Param(uint ulParam, out uint retError) =>
-            NativeBinding.ExtendedMode ? Ext_ISO_SetParam(ulParam, _tetherCtx, out retError) : Pub_ISO_Set_Param(ulParam, out retError);
-        public static byte LMX_func_api_Rec_Ctrl_Release(ref LMX_STRUCT_REC_CTRL lpRecCtrl, out uint retError) =>
-            NativeBinding.ExtendedMode ? Ext_Rec_Ctrl_Release(ref lpRecCtrl, _tetherCtx, out retError) : Pub_Rec_Ctrl_Release(ref lpRecCtrl, out retError);
-        public static byte LMX_func_api_Get_Object(uint objHandle, ref byte lpStoreBuf, uint storeBufSize, out uint retError) =>
-            NativeBinding.ExtendedMode ? Ext_Get_Object(objHandle, ref lpStoreBuf, storeBufSize, _tetherCtx, out retError) : Pub_Get_Object(objHandle, ref lpStoreBuf, storeBufSize, out retError);
-        public static byte LMX_func_api_Get_Object_FormatType(uint objHandle, out uint pFormatType, out uint retError) =>
-            NativeBinding.ExtendedMode ? Ext_Get_Object_FormatType(objHandle, out pFormatType, _tetherCtx, out retError) : Pub_Get_Object_FormatType(objHandle, out pFormatType, out retError);
-        public static byte LMX_func_api_Get_Object_DataSize(uint objHandle, out uint pDataSize, out uint retError) =>
-            NativeBinding.ExtendedMode ? Ext_Get_Object_DataSize(objHandle, out pDataSize, _tetherCtx, out retError) : Pub_Get_Object_DataSize(objHandle, out pDataSize, out retError);
-        public static byte LMX_func_api_Get_Object_FileName(uint objHandle, ref LMX_STRUCT_PTP_ARRAY_STRING pFileName, out uint retError) =>
-            NativeBinding.ExtendedMode ? Ext_Get_Object_FileName(objHandle, ref pFileName, _tetherCtx, out retError) : Pub_Get_Object_FileName(objHandle, ref pFileName, out retError);
-        public static byte LMX_func_api_Skip_Object_Transfer(uint objHandle, out uint retError) =>
-            NativeBinding.ExtendedMode ? Ext_Skip_Object_Transfer(objHandle, _tetherCtx, out retError) : Pub_Skip_Object_Transfer(objHandle, out retError);
-        public static byte LMX_func_api_Ctrl_LiveView_Start(out uint retError) =>
-            NativeBinding.ExtendedMode ? Ext_Ctrl_LiveView_Start(_tetherCtx, out retError) : Pub_Ctrl_LiveView_Start(out retError);
-        public static byte LMX_func_api_Ctrl_LiveView_Stop(out uint retError) =>
-            NativeBinding.ExtendedMode ? Ext_Ctrl_LiveView_Stop(_tetherCtx, out retError) : Pub_Ctrl_LiveView_Stop(out retError);
+        public static byte LMX_func_api_SS_Get_Param(out int pulParam, out uint retError) {
+            lock (_sdkGate) {
+                return NativeBinding.ExtendedMode ? Ext_SS_GetParam(out pulParam, _tetherCtx, out retError) : Pub_SS_Get_Param(out pulParam, out retError);
+            }
+        }
+        public static byte LMX_func_api_SS_Set_Param(long ulParam, out uint retError) {
+            lock (_sdkGate) {
+                return NativeBinding.ExtendedMode ? Ext_SS_SetParam(ulParam, _tetherCtx, out retError) : Pub_SS_Set_Param(ulParam, out retError);
+            }
+        }
+        public static byte LMX_func_api_ISO_Get_Param(out uint pulParam, out uint retError) {
+            lock (_sdkGate) {
+                return NativeBinding.ExtendedMode ? Ext_ISO_GetParam(out pulParam, _tetherCtx, out retError) : Pub_ISO_Get_Param(out pulParam, out retError);
+            }
+        }
+        public static byte LMX_func_api_ISO_Set_Param(uint ulParam, out uint retError) {
+            lock (_sdkGate) {
+                return NativeBinding.ExtendedMode ? Ext_ISO_SetParam(ulParam, _tetherCtx, out retError) : Pub_ISO_Set_Param(ulParam, out retError);
+            }
+        }
+        public static byte LMX_func_api_Rec_Ctrl_Release(ref LMX_STRUCT_REC_CTRL lpRecCtrl, out uint retError) {
+            lock (_sdkGate) {
+                return NativeBinding.ExtendedMode ? Ext_Rec_Ctrl_Release(ref lpRecCtrl, _tetherCtx, out retError) : Pub_Rec_Ctrl_Release(ref lpRecCtrl, out retError);
+            }
+        }
+        public static byte LMX_func_api_Get_Object(uint objHandle, ref byte lpStoreBuf, uint storeBufSize, out uint retError) {
+            lock (_sdkGate) {
+                return NativeBinding.ExtendedMode ? Ext_Get_Object(objHandle, ref lpStoreBuf, storeBufSize, _tetherCtx, out retError) : Pub_Get_Object(objHandle, ref lpStoreBuf, storeBufSize, out retError);
+            }
+        }
+        public static byte LMX_func_api_Get_Object_FormatType(uint objHandle, out uint pFormatType, out uint retError) {
+            lock (_sdkGate) {
+                return NativeBinding.ExtendedMode ? Ext_Get_Object_FormatType(objHandle, out pFormatType, _tetherCtx, out retError) : Pub_Get_Object_FormatType(objHandle, out pFormatType, out retError);
+            }
+        }
+        public static byte LMX_func_api_Get_Object_DataSize(uint objHandle, out ulong pDataSize, out uint retError) {
+            lock (_sdkGate) {
+                return NativeBinding.ExtendedMode ? Ext_Get_Object_DataSize(objHandle, out pDataSize, _tetherCtx, out retError) : Pub_Get_Object_DataSize(objHandle, out pDataSize, out retError);
+            }
+        }
+        public static byte LMX_func_api_Get_Object_FileName(uint objHandle, ref LMX_STRUCT_PTP_ARRAY_STRING pFileName, out uint retError) {
+            lock (_sdkGate) {
+                return NativeBinding.ExtendedMode ? Ext_Get_Object_FileName(objHandle, ref pFileName, _tetherCtx, out retError) : Pub_Get_Object_FileName(objHandle, ref pFileName, out retError);
+            }
+        }
+        public static byte LMX_func_api_Skip_Object_Transfer(uint objHandle, out uint retError) {
+            lock (_sdkGate) {
+                return NativeBinding.ExtendedMode ? Ext_Skip_Object_Transfer(objHandle, _tetherCtx, out retError) : Pub_Skip_Object_Transfer(objHandle, out retError);
+            }
+        }
+        public static byte LMX_func_api_Ctrl_LiveView_Start(out uint retError) {
+            lock (_sdkGate) {
+                return NativeBinding.ExtendedMode ? Ext_Ctrl_LiveView_Start(_tetherCtx, out retError) : Pub_Ctrl_LiveView_Start(out retError);
+            }
+        }
+        public static byte LMX_func_api_Ctrl_LiveView_Stop(out uint retError) {
+            lock (_sdkGate) {
+                return NativeBinding.ExtendedMode ? Ext_Ctrl_LiveView_Stop(_tetherCtx, out retError) : Pub_Ctrl_LiveView_Stop(out retError);
+            }
+        }
 
         public static byte LMX_func_api_Get_LiveView_data(
             ref LMX_STRUCT_LIVEVIEW_INFO_HISTGRAM pHistgram, out uint pHistgramSize,
             ref LMX_STRUCT_LIVEVIEW_INFO_POSTURE pPosture, out uint pPostureSize,
             ref LMX_STRUCT_LIVEVIEW_INFO_LEVEL pLevel, out uint pLevelSize,
-            ref byte pJpeg, out uint pJpegSize, out uint retError) =>
-            NativeBinding.ExtendedMode
+            ref byte pJpeg, out uint pJpegSize, out uint retError) {
+            lock (_sdkGate) {
+                return NativeBinding.ExtendedMode
                 ? Ext_Get_LiveView_data(ref pHistgram, out pHistgramSize, ref pPosture, out pPostureSize, ref pLevel, out pLevelSize, ref pJpeg, out pJpegSize, _tetherCtx, out retError)
                 : Pub_Get_LiveView_data(ref pHistgram, out pHistgramSize, ref pPosture, out pPostureSize, ref pLevel, out pLevelSize, ref pJpeg, out pJpegSize, out retError);
+            }
+        }
 
         // Capability getters: extended path writes into a large scratch buffer, then copies the leading
         // portion (matching layout: NumOfVal@0, SupportVal@4...) into the managed struct — avoids OOB.
         public static byte LMX_func_api_SS_Get_Capability(ref LMX_STRUCT_SS_CAPA_INFO pInfo, out uint retError) {
-            if (!NativeBinding.ExtendedMode) return Pub_SS_Get_Capability(ref pInfo, out retError);
-            EnsureTetherBuffers();
-            byte r = Ext_SS_GetCapability(_capBuf, _tetherCtx, out retError);
-            pInfo = Marshal.PtrToStructure<LMX_STRUCT_SS_CAPA_INFO>(_capBuf);
-            return r;
+            lock (_sdkGate) {
+                if (!NativeBinding.ExtendedMode) return Pub_SS_Get_Capability(ref pInfo, out retError);
+                EnsureTetherBuffers();
+                byte r = Ext_SS_GetCapability(_capBuf, _tetherCtx, out retError);
+                pInfo = Marshal.PtrToStructure<LMX_STRUCT_SS_CAPA_INFO>(_capBuf);
+                return r;
+            }
         }
         public static byte LMX_func_api_ISO_Get_Capability(ref LMX_STRUCT_ISO_CAPA_INFO pInfo, out uint retError) {
-            if (!NativeBinding.ExtendedMode) return Pub_ISO_Get_Capability(ref pInfo, out retError);
-            EnsureTetherBuffers();
-            byte r = Ext_ISO_GetCapability(_capBuf, _tetherCtx, out retError);
-            pInfo = Marshal.PtrToStructure<LMX_STRUCT_ISO_CAPA_INFO>(_capBuf);
-            return r;
+            lock (_sdkGate) {
+                if (!NativeBinding.ExtendedMode) return Pub_ISO_Get_Capability(ref pInfo, out retError);
+                EnsureTetherBuffers();
+                byte r = Ext_ISO_GetCapability(_capBuf, _tetherCtx, out retError);
+                pInfo = Marshal.PtrToStructure<LMX_STRUCT_ISO_CAPA_INFO>(_capBuf);
+                return r;
+            }
         }
         // Dedicated mode-position getter — avoids the CameraMode capability struct whose Tether-buffer layout
         // differs from the managed struct (so reading CurVal_mode_pos from it gives the wrong value).
-        public static byte LMX_func_api_CameraMode_Get_Mode_Pos(out uint pulParam, out uint retError) =>
-            NativeBinding.ExtendedMode ? Ext_CameraMode_GetModePos(out pulParam, _tetherCtx, out retError) : Pub_CameraMode_Get_Mode_Pos(out pulParam, out retError);
+        public static byte LMX_func_api_CameraMode_Get_Mode_Pos(out uint pulParam, out uint retError) {
+            lock (_sdkGate) {
+                return NativeBinding.ExtendedMode ? Ext_CameraMode_GetModePos(out pulParam, _tetherCtx, out retError) : Pub_CameraMode_Get_Mode_Pos(out pulParam, out retError);
+            }
+        }
 
         public static byte LMX_func_api_CameraMode_Get_Capability(ref LMX_STRUCT_RECINFO_CAMERA_MODE_CAPA_INFO pInfo, out uint retError) {
-            if (!NativeBinding.ExtendedMode) return Pub_CameraMode_Get_Capability(ref pInfo, out retError);
-            EnsureTetherBuffers();
-            byte r = Ext_CameraMode_GetCapability(_capBuf, _tetherCtx, out retError);
-            pInfo = Marshal.PtrToStructure<LMX_STRUCT_RECINFO_CAMERA_MODE_CAPA_INFO>(_capBuf);
-            return r;
+            lock (_sdkGate) {
+                if (!NativeBinding.ExtendedMode) return Pub_CameraMode_Get_Capability(ref pInfo, out retError);
+                EnsureTetherBuffers();
+                byte r = Ext_CameraMode_GetCapability(_capBuf, _tetherCtx, out retError);
+                pInfo = Marshal.PtrToStructure<LMX_STRUCT_RECINFO_CAMERA_MODE_CAPA_INFO>(_capBuf);
+                return r;
+            }
         }
 
         // ===================== Extended-only features (image quality, battery) =====================
@@ -186,24 +258,31 @@ namespace LumixWrapper {
 
         /// <summary>Set still image quality (extended only). Refreshes the range first (like SS/BULB).</summary>
         public static byte Ext_SetImageQuality(uint quality, out uint retError) {
-            EnsureTetherBuffers();
-            Ext_ImageInfo_GetCapability(_capBuf, _tetherCtx, out _);
-            return Ext_ImageInfo_SetImageQuality(quality, _tetherCtx, out retError);
+            lock (_sdkGate) {
+                EnsureTetherBuffers();
+                Ext_ImageInfo_GetCapability(_capBuf, _tetherCtx, out _);
+                return Ext_ImageInfo_SetImageQuality(quality, _tetherCtx, out retError);
+            }
         }
-        public static byte Ext_GetImageQuality(out uint quality, out uint retError) =>
-            Ext_ImageInfo_GetImageQuality(out quality, _tetherCtx, out retError);
+        public static byte Ext_GetImageQuality(out uint quality, out uint retError) {
+            lock (_sdkGate) {
+                return Ext_ImageInfo_GetImageQuality(out quality, _tetherCtx, out retError);
+            }
+        }
         /// <summary>Battery reading. <paramref name="level"/> is the uint32 at offset 8 of the struct and the
         /// field to use; <paramref name="levelAlt"/> is the uint16 at offset 12, the other candidate, which only
         /// a reading at some level other than 100% can rule out; <paramref name="head"/> is the first 32 bits,
         /// logged so the struct stays visible. false when the call itself fails.</summary>
         public static bool Ext_TryGetBatteryInfo(out uint level, out uint levelAlt, out uint head, out uint retError, out string rawHead) {
-            level = 0;
-            levelAlt = 0;
-            bool ok = TryReadTetherWord(TetherWord.BatteryInfo, out head, out retError, out rawHead);
-            if (!ok) { return false; }
-            level = ScratchUInt32(8);
-            levelAlt = ScratchUInt16(12);
-            return true;
+            lock (_sdkGate) {
+                level = 0;
+                levelAlt = 0;
+                bool ok = TryReadTetherWord(TetherWord.BatteryInfo, out head, out retError, out rawHead);
+                if (!ok) { return false; }
+                level = ScratchUInt32(8);
+                levelAlt = ScratchUInt16(12);
+                return true;
+            }
         }
 
         // Read a field out of the scratch the last TryReadTetherWord filled. Bounds-checked: these offsets come
@@ -229,10 +308,16 @@ namespace LumixWrapper {
         [DllImport(DLLNAME, EntryPoint = "LMX_func_api_SetupFilesConfig_Set_Target", ExactSpelling = true, CallingConvention = cc)]
         private static extern byte Ext_SetupFilesConfig_SetTarget(ushort unParam, IntPtr ctx, out uint retError);
 
-        public static byte LMX_func_api_SetupFilesConfig_Get_Target(out ushort punParam, out uint retError) =>
-            NativeBinding.ExtendedMode ? Ext_SetupFilesConfig_GetTarget(out punParam, _tetherCtx, out retError) : Pub_SetupFilesConfig_Get_Target(out punParam, out retError);
-        public static byte LMX_func_api_SetupFilesConfig_Set_Target(ushort unParam, out uint retError) =>
-            NativeBinding.ExtendedMode ? Ext_SetupFilesConfig_SetTarget(unParam, _tetherCtx, out retError) : Pub_SetupFilesConfig_Set_Target(unParam, out retError);
+        public static byte LMX_func_api_SetupFilesConfig_Get_Target(out ushort punParam, out uint retError) {
+            lock (_sdkGate) {
+                return NativeBinding.ExtendedMode ? Ext_SetupFilesConfig_GetTarget(out punParam, _tetherCtx, out retError) : Pub_SetupFilesConfig_Get_Target(out punParam, out retError);
+            }
+        }
+        public static byte LMX_func_api_SetupFilesConfig_Set_Target(ushort unParam, out uint retError) {
+            lock (_sdkGate) {
+                return NativeBinding.ExtendedMode ? Ext_SetupFilesConfig_SetTarget(unParam, _tetherCtx, out retError) : Pub_SetupFilesConfig_Set_Target(unParam, out retError);
+            }
+        }
 
         // ===================== Card capacity and battery (extended only) =====================
         // The public SDK headers carry no storage or battery call at all; the Tether DLL exports several, all
@@ -266,8 +351,11 @@ namespace LumixWrapper {
         /// <see cref="CARD_FRAMES_NO_NUMBER"/> when it declines to give one. false when the call itself fails
         /// (standard mode, a body without the export, a refused call). Advisory: report it, never gate a
         /// capture on it.</summary>
-        public static bool Ext_TryGetFreeSpaceInImages(out uint images, out uint retError, out string rawHead) =>
-            TryReadTetherWord(TetherWord.FreeSpaceInImages, out images, out retError, out rawHead);
+        public static bool Ext_TryGetFreeSpaceInImages(out uint images, out uint retError, out string rawHead) {
+            lock (_sdkGate) {
+                return TryReadTetherWord(TetherWord.FreeSpaceInImages, out images, out retError, out rawHead);
+            }
+        }
 
         /// <summary>What the body returns from GetFreeSpaceInImages instead of a count. Measured as the
         /// card-absent reading; whether a card that is present but full reports it too is not yet known.</summary>
@@ -281,32 +369,37 @@ namespace LumixWrapper {
 
         /// <summary>Per-card status word as the Tether DLL reports it. Layout is undocumented; the raw bytes
         /// come back alongside so a log can pin it down.</summary>
-        public static bool Ext_TryGetStatusOfCards(out uint status, out uint retError, out string rawHead) =>
-            TryReadTetherWord(TetherWord.StatusOfCards, out status, out retError, out rawHead);
+        public static bool Ext_TryGetStatusOfCards(out uint status, out uint retError, out string rawHead) {
+            lock (_sdkGate) {
+                return TryReadTetherWord(TetherWord.StatusOfCards, out status, out retError, out rawHead);
+            }
+        }
 
         private enum TetherWord { FreeSpaceInImages, StatusOfCards, BatteryInfo }
 
         private static bool TryReadTetherWord(TetherWord which, out uint value, out uint retError, out string rawHead) {
-            value = 0;
-            retError = 0;
-            rawHead = "";
-            if (!NativeBinding.ExtendedMode) { return false; }
-            try {
-                EnsureTetherBuffers();
-                if (_capBuf == IntPtr.Zero || _capBacking == null) { return false; }
-                Array.Clear(_capBacking, 0, TETHER_WORD_SCRATCH_BYTES);
-                byte r;
-                switch (which) {
-                    case TetherWord.FreeSpaceInImages: r = Ext_GetFreeSpaceInImages(_capBuf, _tetherCtx, out retError); break;
-                    case TetherWord.StatusOfCards: r = Ext_GetStatusOfCards(_capBuf, _tetherCtx, out retError); break;
-                    default: r = Ext_GetBatteryInfo(_capBuf, _tetherCtx, out retError); break;
+            lock (_sdkGate) {
+                value = 0;
+                retError = 0;
+                rawHead = "";
+                if (!NativeBinding.ExtendedMode) { return false; }
+                try {
+                    EnsureTetherBuffers();
+                    if (_capBuf == IntPtr.Zero || _capBacking == null) { return false; }
+                    Array.Clear(_capBacking, 0, TETHER_WORD_SCRATCH_BYTES);
+                    byte r;
+                    switch (which) {
+                        case TetherWord.FreeSpaceInImages: r = Ext_GetFreeSpaceInImages(_capBuf, _tetherCtx, out retError); break;
+                        case TetherWord.StatusOfCards: r = Ext_GetStatusOfCards(_capBuf, _tetherCtx, out retError); break;
+                        default: r = Ext_GetBatteryInfo(_capBuf, _tetherCtx, out retError); break;
+                    }
+                    rawHead = BitConverter.ToString(_capBacking, 0, TETHER_WORD_SCRATCH_BYTES);
+                    if (r != LMX_BOOL_TRUE) { return false; }
+                    value = (uint)(_capBacking[0] | (_capBacking[1] << 8) | (_capBacking[2] << 16) | (_capBacking[3] << 24));
+                    return true;
+                } catch (Exception) {
+                    return false;   // an undocumented export that is absent or differently shaped must not be fatal
                 }
-                rawHead = BitConverter.ToString(_capBacking, 0, TETHER_WORD_SCRATCH_BYTES);
-                if (r != LMX_BOOL_TRUE) { return false; }
-                value = (uint)(_capBacking[0] | (_capBacking[1] << 8) | (_capBacking[2] << 16) | (_capBacking[3] << 24));
-                return true;
-            } catch (Exception) {
-                return false;   // an undocumented export that is absent or differently shaped must not be fatal
             }
         }
 
@@ -317,49 +410,61 @@ namespace LumixWrapper {
         // ===================== Extended connection (raw buffers + held context) =====================
         /// <summary>Enumerate cameras via the extended DLL. Returns model names (index-aligned).</summary>
         public static string[] Ext_Enumerate(out uint retError) {
-            EnsureTetherBuffers();
-            byte r = Ext_GetPnPDeviceInfo(_devBuf, out retError);
-            int count = Marshal.ReadInt32(_devBuf, 0);
-            if (r != LMX_BOOL_TRUE || count <= 0) return Array.Empty<string>();
-            var names = new string[count];
-            for (int i = 0; i < count; i++)
-                names[i] = Marshal.PtrToStringUni(_devBuf + EXT_DEVINFO_BASE + i * EXT_DEVINFO_STRIDE + EXT_MODELNAME_OFF) ?? "";
-            return names;
+            lock (_sdkGate) {
+                EnsureTetherBuffers();
+                byte r = Ext_GetPnPDeviceInfo(_devBuf, out retError);
+                int count = Marshal.ReadInt32(_devBuf, 0);
+                if (r != LMX_BOOL_TRUE || count <= 0) return Array.Empty<string>();
+                var names = new string[count];
+                for (int i = 0; i < count; i++)
+                    names[i] = Marshal.PtrToStringUni(_devBuf + EXT_DEVINFO_BASE + i * EXT_DEVINFO_STRIDE + EXT_MODELNAME_OFF) ?? "";
+                return names;
+            }
         }
 
         /// <summary>Select+open the device by index (7-arg select fills the context; then OpenSession).</summary>
         public static bool Ext_Connect(uint index, out uint retError) {
-            EnsureTetherBuffers();
-            // (re)enumerate so the device buffer + global list are fresh, then select this index's dev_Index
-            Ext_GetPnPDeviceInfo(_devBuf, out retError);
-            int devIndex = Marshal.ReadInt32(_devBuf, EXT_DEVINFO_BASE + (int)index * EXT_DEVINFO_STRIDE);
-            byte r = Ext_SelectPnPDevice((uint)devIndex, _devBuf, _tetherCtx, 0, IntPtr.Zero, 0, out retError);
-            if (r != LMX_BOOL_TRUE) return false;
-            Ext_OpenSession(0x00010001, out _, _tetherCtx, out retError);
-            return true;
+            lock (_sdkGate) {
+                EnsureTetherBuffers();
+                // (re)enumerate so the device buffer + global list are fresh, then select this index's dev_Index
+                Ext_GetPnPDeviceInfo(_devBuf, out retError);
+                int devIndex = Marshal.ReadInt32(_devBuf, EXT_DEVINFO_BASE + (int)index * EXT_DEVINFO_STRIDE);
+                byte r = Ext_SelectPnPDevice((uint)devIndex, _devBuf, _tetherCtx, 0, IntPtr.Zero, 0, out retError);
+                if (r != LMX_BOOL_TRUE) return false;
+                Ext_OpenSession(0x00010001, out _, _tetherCtx, out retError);
+                return true;
+            }
         }
 
         public static void Ext_Disconnect(out uint retError) {
-            Ext_CloseSession(_tetherCtx, out retError);
-            Ext_CloseDevice(_tetherCtx, out retError);
+            lock (_sdkGate) {
+                Ext_CloseSession(_tetherCtx, out retError);
+                Ext_CloseDevice(_tetherCtx, out retError);
+            }
         }
 
         // Split accessors so the driver can log/step through the teardown and see which call stalls/crashes.
-        public static byte Ext_CloseSessionOnly(out uint retError) => Ext_CloseSession(_tetherCtx, out retError);
-        public static byte Ext_CloseDeviceOnly(out uint retError) => Ext_CloseDevice(_tetherCtx, out retError);
+        public static byte Ext_CloseSessionOnly(out uint retError) {
+            lock (_sdkGate) { return Ext_CloseSession(_tetherCtx, out retError); }
+        }
+        public static byte Ext_CloseDeviceOnly(out uint retError) {
+            lock (_sdkGate) { return Ext_CloseDevice(_tetherCtx, out retError); }
+        }
 
         /// <summary>Refresh the SS range so BULB (0xFFFFFFFF) sticks instead of clamping to 60s. Extended only.</summary>
         public static bool Ext_EnsureBulb(out uint retError) {
-            EnsureTetherBuffers();
-            for (int attempt = 0; attempt < 5; attempt++) {
-                Ext_SS_GetCapability(_capBuf, _tetherCtx, out _);
-                System.Threading.Thread.Sleep(250);
-                Ext_SS_SetParam(unchecked((uint)0xFFFFFFFF), _tetherCtx, out retError);
-                System.Threading.Thread.Sleep(150);
-                Ext_SS_GetParam(out int cur, _tetherCtx, out _);
-                if ((uint)cur == 0xFFFFFFFF) return true;
+            lock (_sdkGate) {
+                EnsureTetherBuffers();
+                for (int attempt = 0; attempt < 5; attempt++) {
+                    Ext_SS_GetCapability(_capBuf, _tetherCtx, out _);
+                    System.Threading.Thread.Sleep(250);
+                    Ext_SS_SetParam(unchecked((uint)0xFFFFFFFF), _tetherCtx, out retError);
+                    System.Threading.Thread.Sleep(150);
+                    Ext_SS_GetParam(out int cur, _tetherCtx, out _);
+                    if ((uint)cur == 0xFFFFFFFF) return true;
+                }
+                retError = 0; return false;
             }
-            retError = 0; return false;
         }
     }
 }

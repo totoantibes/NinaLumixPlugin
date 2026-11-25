@@ -235,15 +235,18 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
             // process only the first so we don't download twice.
             if (_downloadExposure == null || _downloadExposure.Task.IsCompleted) { return; }
             uint formatType;
-            uint dataSize;
+            // 64-bit, because that is what the SDK writes through this pointer. It stays 64-bit
+            // until the size has been bounded below, so a garbage high half is caught rather than
+            // silently truncated into a plausible-looking 32-bit length.
+            ulong dataSize64;
             LMX_STRUCT_PTP_ARRAY_STRING fileNameArrStr = new LMX_STRUCT_PTP_ARRAY_STRING();
 
             LMX_func_api_Get_Object_FormatType(cb_event_param, out formatType, out retError);
-            LMX_func_api_Get_Object_DataSize(cb_event_param, out dataSize, out retError);
+            LMX_func_api_Get_Object_DataSize(cb_event_param, out dataSize64, out retError);
             LMX_func_api_Get_Object_FileName(cb_event_param, ref fileNameArrStr, out retError);
             _lastFormat = formatType;
-            Logger.Info($"[LumixCapture] object=0x{cb_event_param:X} format=0x{formatType:X} size={dataSize}");
-            if (dataSize == 0) {
+            Logger.Info($"[LumixCapture] object=0x{cb_event_param:X} format=0x{formatType:X} size={dataSize64}");
+            if (dataSize64 == 0) {
                 // The camera raised a transfer event for an object that holds no data. Seen when the SD card is
                 // full and the save target includes SD: the card write has nowhere to go, so the frame never
                 // exists. This used to call TrySetResult(null) — completing the exposure as a SUCCESS with no
@@ -253,14 +256,16 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
                 FailExposure("The camera reported a frame with no data." + DescribeCardForFailure());
                 return;
             }
-            if (dataSize > MAX_OBJECT_BYTES) {
+            if (dataSize64 > MAX_OBJECT_BYTES) {
                 // Allocating a garbage size would throw OutOfMemory inside this native callback — the one place
                 // an exception must not be raised. Refuse the object instead of trying to hold it.
-                Logger.Warning($"[LumixCapture] object size {dataSize} exceeds the {MAX_OBJECT_BYTES} byte limit for a still frame — refusing to allocate; failing this frame.");
+                Logger.Warning($"[LumixCapture] object size {dataSize64} exceeds the {MAX_OBJECT_BYTES} byte limit for a still frame — refusing to allocate; failing this frame.");
                 ReleasePendingTransfer(cb_event_param);
-                FailExposure($"The camera reported an implausible frame size of {dataSize} bytes.");
+                FailExposure($"The camera reported an implausible frame size of {dataSize64} bytes.");
                 return;
             }
+            // Safe: bounded by MAX_OBJECT_BYTES (256 MB) immediately above.
+            uint dataSize = (uint)dataSize64;
             buffer = new byte[dataSize];
             byte gr = 0;
             try { gr = LMX_func_api_Get_Object(cb_event_param, ref buffer[0], dataSize, out retError); } catch (Exception ex) { Logger.Error("[LumixCapture] Get_Object threw: " + ex); }
