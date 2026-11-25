@@ -516,31 +516,94 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
             }
         }
 
-        public bool HasBattery => true;
+        // Only the Tether DLL can answer this. Checked against both export tables: the bundled public SDK
+        // (85 exports) has zero battery-related exports, and LMX_func_api_GetBatteryInfo exists only in the
+        // Tether DLL. So in Standard mode there is nothing to ask, and NINA should not show a battery
+        // indicator it can never fill. NativeBinding.Initialize settles the mode before the first P/Invoke,
+        // so this is stable by the time NINA reads it.
+        public bool HasBattery => NativeBinding.ExtendedMode;
 
         // ---- Battery ----
-        // Read ONCE, at connect, and never again. Not a cache with a timeout - no native call from the getter
-        // at all.
+        // The getter is a plain field read - no native call, ever. The reading behind it is refreshed only
+        // from an idle point in the capture cycle, never from NINA's polling.
         //
-        // Why: NINA asks for BatteryLevel from its device-update cycle and from metaData.FromCamera(this) on
-        // every frame and every live-view frame, so any native call in this getter lands in the middle of
-        // whatever the camera is doing. Twice on 2026-11-23 a refresh came back having written nothing - an
-        // all-zero buffer with err=0 - and the process died inside VCRUNTIME140 about a second later: at
-        // 16:15:33 during live view, and at 18:13:22 one second before a 120s bulb sub, taking a Target
-        // Scheduler session with it. Two for two. The first fix only suppressed the read during live view,
-        // which was too narrow.
+        // Why the getter cannot touch the SDK: NINA asks for BatteryLevel from its 2s device-update cycle and
+        // from metaData.FromCamera(this) on every frame and every live-view frame, so a native call here lands
+        // wherever the camera happens to be - including inside an image transfer. That is what killed five
+        // sessions on 2026-11-23/24.
         //
-        // The cause is still unproven and a dump now exists to settle it. Until then the reading is not worth
-        // one native call in a hot path: the connect-time read has never once misbehaved, and a battery level
-        // that is 83 minutes stale is worth strictly more than a session.
+        // What the dumps showed (processes 3784 and 13588, both captured): the SDK finishes an ABANDONED
+        // transfer 141s and 82s after the plugin's Get_Object for that frame has already returned, with a
+        // memcpy of the full frame into a native buffer it has itself freed - on a thread it owns, with no
+        // managed or plugin frame anywhere on the stack. The copy dies 7,968 bytes in, when it runs off the
+        // short mapped prefix that is left. Everything it wrote before that landed on whatever had taken that
+        // address: that is the heap corruption, and the later crashes in unrelated code are its victims.
+        //
+        // The battery read did not corrupt anything itself. In both dumps it was REFUSED - err=0 with an
+        // all-zero scratch - in the same millisecond that Get_Object returned 0 with a zero-filled buffer.
+        // Two requests bouncing together is the signature of a channel that already had two users: the read
+        // was issued from NINA's timer while the SDK was mid-transfer. The corrupting write is inside
+        // Panasonic's DLL and nothing here can make it safe, so keeping a second request off the channel
+        // during a transfer is the whole defence.
+        //
+        // Hence the refresh below, which runs at the top of StartExposure: the previous frame has been
+        // downloaded and the next shutter has not fired. Two other reads already live at that point - the
+        // exposure-mode poll and the card-capacity read - and neither has ever been implicated, across
+        // sessions of up to 234 frames. The interval keeps this to a handful of reads a night instead of one
+        // per NINA poll, and the read gives up rather than wait if the gate is busy.
+        private static readonly TimeSpan BATTERY_REFRESH_INTERVAL = TimeSpan.FromMinutes(5);
+        private DateTime _lastBatteryRefreshUtc = DateTime.MinValue;
         private int _batteryPercent = -1;
         private uint _lastLoggedBatteryWord = uint.MaxValue;
 
         // -1 is NINA's "unknown", which is what every camera without a battery reports.
         public int BatteryLevel => _batteryPercent;
 
+        // Blocking read, for connect only: there is nothing else on the channel then, and the first reading
+        // should not be skipped.
         private int ReadBatteryPercent() {
-            if (!LumixCam.Ext_TryGetBatteryInfo(out uint level, out uint levelAlt, out uint head, out uint err, out string rawHead)) {
+            // Standard mode has no battery function to call, so report unknown without pretending the camera
+            // was asked and declined to answer. See HasBattery.
+            if (!NativeBinding.ExtendedMode) { return -1; }
+            bool ok = LumixCam.Ext_TryGetBatteryInfo(out uint level, out uint levelAlt, out uint head, out uint err, out string rawHead);
+            return InterpretBatteryReading(ok, level, levelAlt, head, err, rawHead);
+        }
+
+        // Refresh from an idle point in the capture cycle; see the policy note above BatteryLevel for why it
+        // may not be done anywhere else. `idleOnEntry` is captured by the caller BEFORE it cancels an exposure
+        // that is still running, because a cancelled exposure can leave a transfer outstanding and this must
+        // not put a second request on the channel while one is.
+        private void MaybeRefreshBatteryAtIdle(bool idleOnEntry) {
+            // Standard mode first: without this the refresh would take the gate and log a failure every five
+            // minutes for a function the public SDK does not export. See HasBattery.
+            if (!NativeBinding.ExtendedMode) { return; }
+            if (!idleOnEntry || _liveViewEnabled) { return; }
+            if (DateTime.UtcNow - _lastBatteryRefreshUtc < BATTERY_REFRESH_INTERVAL) { return; }
+
+            bool ok = LumixCam.Ext_TryGetBatteryInfoIfFree(out uint level, out uint levelAlt, out uint head,
+                                                           out uint err, out string rawHead, out bool gateBusy);
+            if (gateBusy) {
+                // Something else holds the SDK gate, so no request was issued and the previous reading stands.
+                // The interval is deliberately NOT reset: the next exposure retries instead of waiting out
+                // another five minutes for a reading that was never attempted.
+                Logger.Debug("[LumixBattery] the SDK was busy; skipping this refresh.");
+                return;
+            }
+            _lastBatteryRefreshUtc = DateTime.UtcNow;
+            _batteryPercent = InterpretBatteryReading(ok, level, levelAlt, head, err, rawHead);
+
+            // One line per refresh, unconditionally. The detailed line in InterpretBatteryReading fires only
+            // when the value changes, which was right when the getter was called thousands of times a session
+            // but hides the mechanism now that reads are throttled: a session on mains, or on a battery that
+            // stays at 100, would log one battery line at connect and nothing afterwards, leaving no way to
+            // tell from the log whether the refresh ran at all. At this interval it is about a dozen lines a
+            // session, which is worth being able to see it working.
+            Logger.Info($"[LumixBattery] refreshed: {(_batteryPercent < 0 ? "unknown" : _batteryPercent.ToString() + "%")}" +
+                        $"; next no sooner than {BATTERY_REFRESH_INTERVAL.TotalMinutes:0} min from now.");
+        }
+
+        private int InterpretBatteryReading(bool ok, uint level, uint levelAlt, uint head, uint err, string rawHead) {
+            if (!ok) {
                 Logger.Info($"[LumixBattery] the camera did not report battery info (err={err}, bytes={rawHead}).");
                 return -1;
             }
@@ -749,6 +812,10 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
 
         public void StartExposure(CaptureSequence sequence) {
             if (Connected) {
+                // Captured before the cancellation below, and used only by the battery refresh: an exposure
+                // that gets cancelled here can leave a transfer outstanding, and that is exactly when a second
+                // request must not go on the channel.
+                bool idleOnEntry = _downloadExposure == null || _downloadExposure.Task.Status > TaskStatus.Running;
                 if (_recheckCardCapacity) {
                     // The previous frame came back empty. Re-read the card here, on NINA's thread, so the next
                     // failure message carries a current number instead of the one from connect.
@@ -761,6 +828,7 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
                     try { bulbCompletionCTS?.Cancel(); } catch { }
                     _downloadExposure.TrySetCanceled();
                 }
+                MaybeRefreshBatteryAtIdle(idleOnEntry);
                 LMX_STRUCT_REC_CTRL lmx_rec_ctrl = new LMX_STRUCT_REC_CTRL();
                 lmx_rec_ctrl.CtrlID = ((uint)Lmx_TagID_Rec_Ctrl_Release.LMX_DEF_LIB_TAG_REC_CTRL_RELEASE_ONESHOT);
                 lmx_rec_ctrl.ParamData.NumOfVal = 0;
@@ -1110,8 +1178,12 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
                         LumixCam.LMX_func_api_SetupFilesConfig_Set_Target(saveTgt, out retError);
                         Logger.Info($"Save target set to {saveTgt} (0=SD,1=PC,2=PC+SD), err={retError}.");
                         ReportCardCapacity(saveTgt);
-                        // The one and only battery read of the session; see BatteryLevel for why.
+                        // The session's first battery read, taken here because the channel is quiet at connect.
+                        // It also starts the refresh interval, so the first exposure does not immediately read
+                        // again; after this the only reads are the throttled idle-point refreshes. See the
+                        // policy note above BatteryLevel.
                         _batteryPercent = ReadBatteryPercent();
+                        _lastBatteryRefreshUtc = DateTime.UtcNow;
                     }
 
                     lumixCameras = new Dictionary<string, CameraSpecs>
