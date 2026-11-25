@@ -1,7 +1,9 @@
 # The heap corruption, explained: an orphaned transfer into a freed buffer
 
-Written 2026-11-25 from the two crash dumps of 24 November. They are the only dumps ever
-captured of this fault; this document exists so the dumps themselves can be deleted. The
+Written 2026-11-25 from the two crash dumps of 24 November, then extended the same evening
+when the whole chain was reproduced deliberately - see "Reproduced on demand" at the end,
+which is the part to read if you only read one section. The dumps were the only ones ever
+captured of this fault and have since been deleted; this document replaces them. The
 findings below are what the code's battery, gating and transfer-abandonment decisions rest on,
 so read this before changing any of them.
 
@@ -39,7 +41,7 @@ ntdll!RtlUserThreadStart
 | | process 3784 | process 13588 |
 |---|---|---|
 | dump time | 24 Nov 02:08:13 | 24 Nov 09:55:01 |
-| copy length (`r14` = `r15`) | 18,890,240 | 18,623,488 |
+| copy length (`r14` = `r15`) | 18,890,240 (`0x1203e00`) | 18,624,000 (`0x11c2e00`) |
 | destination | `0x211b275a040` | `0x2d2c6bb0040` |
 | bytes copied before the fault | 7,968 | 7,968 |
 | threads in the process | 49 | 49 |
@@ -83,10 +85,18 @@ length against the session logs identifies the exact frame, and each appears onc
 
 | | process 3784 | process 13588 |
 |---|---|---|
-| frame reported | 02:05:51.639 | 09:53:38.887 |
-| plugin's `Get_Object` returned | 02:05:51.768, `ret=0` | 09:53:39.021, `ret=1` |
+| frame reported | 02:05:51.639 | 09:53:43.461 |
+| plugin's `Get_Object` returned | 02:05:51.768, **`ret=0`** | 09:53:43.650, **`ret=0`** |
+| the plugin abandoned it | `Skip_Object_Transfer` | `Skip_Object_Transfer` |
 | the SDK performed the copy | 02:08:13 | 09:55:01 |
-| **delay** | **141 s** | **82 s** |
+| **delay** | **141 s** | **77 s** |
+
+In **both** dumps the orphaned transfer is the one whose `Get_Object` returned 0 with a
+zero-filled buffer and which the plugin then abandoned. An earlier revision of this document
+attributed the 13588 copy to a *successful* transfer 82 s earlier; that was a hex conversion
+error on `r14` (`0x11c2e00` is 18,624,000, not 18,623,488) and it is corrected above. The
+corrected reading is the simpler one: the SDK completes transfers it has already reported as
+failed.
 
 ## The mechanism
 
@@ -160,4 +170,122 @@ It is this fault if the exception address is in `VCRUNTIME140!memcpy*`, the call
 find that size in the session log: the gap between the `Get_Object` that returned and the dump
 time is the delay. Anything else is new.
 
-Worth reporting upstream to Panasonic as a use-after-free in the Tether SDK's transfer path.
+## Reproduced on demand, 2026-11-25
+
+Everything above was inferred from two post-mortems. On the evening of 25 November the whole
+chain was reproduced deliberately, on the same camera, in three experiments — each a single
+command, none of them waiting for luck. The analysis no longer rests on two dumps.
+
+### 1. The SDK is not thread-safe on one context
+
+`scripts\lumix-race-probe.ps1` on the imaging PC, NINA closed, 2,000 calls per phase. Every
+call is a read; no shutter is actuated.
+
+| phase | threads | lock | result |
+|---|---|---|---|
+| 2 | one | n/a | 6.2 s, zero symptoms |
+| 3 | two | none | **deadlocks inside `Lmxptpif` within seconds** |
+| 4 | two | one lock | 7.0 s, zero symptoms |
+
+The only variable between 3 and 4 is the lock. Phase 3 had also deadlocked on 24 November, so
+this is two independent reproductions. The lock costs ~13% on that benchmark — back-to-back SDK
+reads from two threads — so nothing at the plugin's real call rate.
+
+**This is the evidence for the gate.** It was the right fix for a demonstrated defect.
+
+### 2. One overlapping call during a transfer breaks the transfer
+
+`scripts\lumix-late-write-probe.ps1`, written for this. It fires one frame, waits for the
+transfer event, then starts a battery thread with no lock and calls `Get_Object` into a 32 MB
+native buffer pre-filled with `0xCC`:
+
+```
+[0000104ms] capture 1: Rec_Ctrl_Release ret=1 err=0x00000000
+[0001411ms] callback: event 0x10000043 handle 0x12345678
+[0001417ms] Get_Object_DataSize ret=1 size=18610176 err=0x00000000
+[0001418ms] battery thread started, NO lock - colliding with the fetch now
+[0001433ms] Get_Object ret=0 err=0x00000000 magic=CC CC CC CC
+[0001470ms] battery thread stopped after 1 calls, 1 refused
+```
+
+Reproduced on both runs where the capture succeeded. Two facts that correct the record:
+
+- **One colliding call is enough.** The battery thread got exactly one call in before the fetch
+  failed, and that call was refused too — both requests bounce off each other. The trigger is a
+  single unlucky overlap, not sustained polling, which is how a 2-second device-update timer
+  found it inside 40 frames.
+- **The SDK writes nothing; it does not zero the buffer.** The `0xCC` guard survived intact.
+  NINA's `magic=00 00 00 00` at the same moment was the plugin's own freshly allocated array.
+
+### 3. The SDK then writes into memory it has freed
+
+The decisive one. Watching the *caller's* buffer proves nothing, because the destination in both
+dumps was the SDK's own allocation — so instead make the SDK's own freed memory fault on write,
+with page heap. Applied to a renamed copy of the PowerShell host, so the setting touches nothing
+else on the machine:
+
+```
+copy C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe C:\nina\scripts\lumixprobe.exe
+.\gflags.exe /p /enable lumixprobe.exe /full          (elevated; writes HKLM)
+.\lumixprobe.exe -ExecutionPolicy Bypass -File .\lumix-late-write-probe.ps1
+.\gflags.exe /p /disable lumixprobe.exe                (always, afterwards)
+```
+
+The probe died seconds after going quiet. Windows recorded:
+
+```
+EventType          = AutoVerifierV2
+Faulting module    = VCRUNTIME140.dll
+Faulting version   = 14.50.35719.0
+Exception code     = c0000005
+Exception offset   = 0x00000000000114f3
+IsFatal            = 1
+```
+
+`AutoVerifierV2` is page heap reporting a **write to freed memory**, caught at the instruction
+rather than minutes later in whatever had taken that address. The faulting module and exception
+code match both 24 November dumps: `memcpy` in the C runtime, called from the SDK.
+
+### What the three experiments establish together
+
+| step | how it is known |
+|---|---|
+| concurrent ungated calls wedge the SDK | measured — race probe, phases 2/3/4 |
+| one overlap during a transfer makes `Get_Object` fail writing nothing | measured — late-write probe, twice |
+| the plugin abandons that transfer | the plugin's own code path |
+| the SDK later writes into memory it has freed | **measured — page-heap fault in `VCRUNTIME140`** |
+| in NINA that memory belongs to something else, so the heap corrupts | inferred, from the two dumps |
+
+Only the last line is still inference, and it is the least surprising one: a write to freed
+memory lands on whatever now owns it.
+
+### Prerequisites, if the probe is ever re-run
+
+A capture needs **all five** callbacks registered (`OBJCT_ADD`, `OBJCT_REQ_TRNSFER`,
+`REC_CTRL_RELEASE`, `SHUTTER`, `ISO`) **and** `SetupFilesConfig_Set_Target(1 = PC)`. Without the
+save target, `Rec_Ctrl_Release` returns 0 and no transfer event ever arrives — the first run
+failed exactly that way. The probe writes that one camera setting and nothing else.
+
+Several constants must be read from `Library/lumixcam.cs` rather than recalled: ONESHOT is
+`0x03000011`, `SHUTTER` `0x02000030`, `ISO` `0x02000020`. `SS_Get_Param` is not an export at
+all — the Tether spelling is `SS_GetParam`. `SelectPnPDevice` takes **seven** parameters, and
+the device index must be read from the device buffer at offset 520 with a 262,144-byte buffer.
+Check every entry point against the DLL's export table before running anything; four of these
+were wrong on the first attempt and one of them crashed the probe before it did any work.
+
+### The wedge is process-local
+
+Recovery needs no power cycle. Closing the wedged process released everything, and NINA then
+connected, ran live view and downloaded a frame immediately afterwards. The deadlock lives in
+the DLL's per-process state, not in the camera: the PTP session drops when the process exits and
+the body accepts a fresh one at once. The fix for a wedge is to restart the host process.
+
+### For an upstream report
+
+Panasonic have everything they need in the above: a one-command reproduction of the refused
+transfer, a one-command reproduction of the deadlock with a matched control showing a single
+lock fixes it, and a page-heap-verified write-after-free with the faulting module, exception
+code and offset. The defect is that `LMX_func_api_Get_Object` can report failure while leaving
+an internal transfer outstanding, and the DLL then completes that transfer into a buffer it has
+already released.
+
