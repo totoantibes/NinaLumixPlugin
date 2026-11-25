@@ -13,6 +13,8 @@ targets `net8.0` and Windows PowerShell 5.1 cannot load it.
 | `verify-no-ungated-path.ps1` | Does any method reach `Lmxptpif.dll` without taking the SDK gate? |
 | `verify-gate-field.ps1` | Do all the gated entry points lock on the *same* field? |
 | `pe_exports.py` | Helper: prints a PE DLL's exported names (used by the first script). |
+| `lumix-race-probe.ps1` | **Needs the camera.** Is the Tether DLL thread-safe on one context? |
+| `lumix-late-write-probe.ps1` | **Needs the camera, fires the shutter.** Does the SDK finish an abandoned transfer? |
 
 ## verify-entrypoints.ps1
 
@@ -60,3 +62,23 @@ the design.
 The one hardware probe here. Runs on the imaging PC under Windows PowerShell 5.1 with NINA
 closed, fires one frame, and checks on guarded native buffers whether `Get_Object_DataSize`
 writes 8 bytes (it does: `UINT64*`) and whether `Get_Object` stays inside `storeBufSize`.
+
+## The two hardware probes
+
+Both run on the imaging PC under Windows PowerShell 5.1 with NINA closed. Between them they
+reproduce the fault described in `docs/crash-analysis-2026-11-24.md` on demand, which is why
+that document no longer has to rely on the two crash dumps.
+
+`lumix-race-probe.ps1 -Phase 2,3` then `-Phase 4` makes the case for the gate: 2,000 calls on
+one thread are clean, the same calls on two threads with no lock deadlock the DLL within
+seconds, and two threads with one lock are clean again. Reads only - no shutter.
+
+`lumix-late-write-probe.ps1` goes further and needs a frame: it collides one battery read with a
+real 18 MB `Get_Object`, which makes the fetch return 0 having written nothing, abandons the
+transfer as the plugin does, and then watches. Run under page heap it caught the SDK writing to
+freed memory - `AutoVerifierV2`, `VCRUNTIME140.dll`, `c0000005`. It writes one camera setting,
+the save target, because without it no PC transfer is ever offered.
+
+Read the "Prerequisites" note in the crash-analysis document before changing either: several of
+the SDK's constants and signatures are not what you would guess, and getting one wrong wastes a
+run or crashes the probe before it does any work.
