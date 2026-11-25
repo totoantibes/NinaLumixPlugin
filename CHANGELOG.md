@@ -1,5 +1,17 @@
 ﻿# LumixCamera
 
+## 1.3.1.1
+Metadata only - no code changes, and functionally identical to 1.3.1.0.
+
+- **Contributor credit now appears in the plugin description** that N.I.N.A. shows, rather than
+  only in the changelog. Colour live view and the optional built-in LibRaw decoder are the work
+  of [flexo-112](https://github.com/flexo-112), contributed in
+  [#2](https://github.com/totoantibes/NinaLumixPlugin/pull/2), along with the sensor-table
+  corrections and the release workflow. Those features first shipped in 1.3.0.0, which was
+  withdrawn before it reached the plugin manager, so 1.3.1.0 was the first release in which they
+  actually reached users - and it credited nobody where users would see it.
+- The plugin's one-line description no longer says "nightly". It had said so since 1.0.0.30.
+
 ## 1.3.1.0
 Includes everything from 1.3.0.0, which was withdrawn before it reached the plugin manager while
 the crash below was investigated - so for anyone updating from 1.2.0.0, the colour live view and
