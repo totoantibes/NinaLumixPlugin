@@ -285,6 +285,30 @@ namespace LumixWrapper {
             }
         }
 
+        // The optional variant, for the mid-session refresh: a battery reading is never worth waiting for.
+        // If the gate is not free then the SDK is busy with something that matters more than a percentage -
+        // an image transfer, most likely - so report gateBusy and let the caller skip this round rather than
+        // queue a second request behind it. `lock` inside Ext_TryGetBatteryInfo re-enters on this thread, so
+        // the gate is held exactly once for the duration of the native call either way.
+        private const int BATTERY_GATE_WAIT_MS = 50;
+        public static bool Ext_TryGetBatteryInfoIfFree(out uint level, out uint levelAlt, out uint head,
+                                                       out uint retError, out string rawHead, out bool gateBusy) {
+            level = 0;
+            levelAlt = 0;
+            head = 0;
+            retError = 0;
+            rawHead = "";
+            gateBusy = false;
+            bool held = false;
+            try {
+                System.Threading.Monitor.TryEnter(_sdkGate, BATTERY_GATE_WAIT_MS, ref held);
+                if (!held) { gateBusy = true; return false; }
+                return Ext_TryGetBatteryInfo(out level, out levelAlt, out head, out retError, out rawHead);
+            } finally {
+                if (held) { System.Threading.Monitor.Exit(_sdkGate); }
+            }
+        }
+
         // Read a field out of the scratch the last TryReadTetherWord filled. Bounds-checked: these offsets come
         // from an observed layout, not a documented one.
         private static uint ScratchUInt32(int offset) {
