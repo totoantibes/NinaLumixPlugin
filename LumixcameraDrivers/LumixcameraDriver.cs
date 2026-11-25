@@ -516,7 +516,12 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
             }
         }
 
-        public bool HasBattery => true;
+        // Only the Tether DLL can answer this. Checked against both export tables: the bundled public SDK
+        // (85 exports) has zero battery-related exports, and LMX_func_api_GetBatteryInfo exists only in the
+        // Tether DLL. So in Standard mode there is nothing to ask, and NINA should not show a battery
+        // indicator it can never fill. NativeBinding.Initialize settles the mode before the first P/Invoke,
+        // so this is stable by the time NINA reads it.
+        public bool HasBattery => NativeBinding.ExtendedMode;
 
         // ---- Battery ----
         // The getter is a plain field read - no native call, ever. The reading behind it is refreshed only
@@ -557,6 +562,9 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
         // Blocking read, for connect only: there is nothing else on the channel then, and the first reading
         // should not be skipped.
         private int ReadBatteryPercent() {
+            // Standard mode has no battery function to call, so report unknown without pretending the camera
+            // was asked and declined to answer. See HasBattery.
+            if (!NativeBinding.ExtendedMode) { return -1; }
             bool ok = LumixCam.Ext_TryGetBatteryInfo(out uint level, out uint levelAlt, out uint head, out uint err, out string rawHead);
             return InterpretBatteryReading(ok, level, levelAlt, head, err, rawHead);
         }
@@ -566,6 +574,9 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
         // that is still running, because a cancelled exposure can leave a transfer outstanding and this must
         // not put a second request on the channel while one is.
         private void MaybeRefreshBatteryAtIdle(bool idleOnEntry) {
+            // Standard mode first: without this the refresh would take the gate and log a failure every five
+            // minutes for a function the public SDK does not export. See HasBattery.
+            if (!NativeBinding.ExtendedMode) { return; }
             if (!idleOnEntry || _liveViewEnabled) { return; }
             if (DateTime.UtcNow - _lastBatteryRefreshUtc < BATTERY_REFRESH_INTERVAL) { return; }
 
