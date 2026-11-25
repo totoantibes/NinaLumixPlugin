@@ -7,13 +7,13 @@ using System.Runtime.InteropServices;
 
 // [MANDATORY] The assembly versioning
 //Should be incremented for each new release build of a plugin
-[assembly: AssemblyVersion("1.3.1.0")]
-[assembly: AssemblyFileVersion("1.3.1.0")]
+[assembly: AssemblyVersion("1.3.1.1")]
+[assembly: AssemblyFileVersion("1.3.1.1")]
 
 // [MANDATORY] The name of your plugin
 [assembly: AssemblyTitle("LumixCamera")]
 // [MANDATORY] A short description of your plugin
-[assembly: AssemblyDescription("Control Lumix Cameras natively - nightly")]
+[assembly: AssemblyDescription("Control Lumix Cameras natively over USB")]
 
 // The following attributes are not required for the plugin per se, but are required by the official manifest meta data
 
@@ -87,6 +87,13 @@ The driver cannot set the exposure-mode dial (A/S/P/M) - that must be set on the
 * Lumix RAW data assume a 14 bit depth. Overriding the bitdepth is also possible from the settings page.
 * RAW (.RW2) decoding depends on your N.I.N.A. version. N.I.N.A. 3.3 and later convert RAW with LibRaw 0.22, which decodes RW2 from all current bodies (GH7, S5 II, S9, G9 II ...) directly - no workaround needed. On 3.2 and earlier the DCRaw/FreeImage converters do not know the newer bodies and the preview is noise; for those, enable Use built-in LibRaw decoder in the plugin options (see below). Prefer JPEG (extended mode only) remains as a last resort.
 * In standard mode Bulb is unavailable, so a requested exposure is snapped to the nearest supported shutter speed (max 60 s). Bulb / >60 s requires extended mode.
+
+# Credits
+
+Colour live view and the optional built-in LibRaw decoder are the work of
+[flexo-112](https://github.com/flexo-112), contributed in
+[pull request #2](https://github.com/totoantibes/NinaLumixPlugin/pull/2), along with the
+sensor-table corrections and the release workflow. Thank you.
 
 # Getting help
 
