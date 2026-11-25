@@ -1,6 +1,12 @@
 ﻿# LumixCamera
 
 ## 1.3.1.0
+Includes everything from 1.3.0.0, which was withdrawn before it reached the plugin manager while
+the crash below was investigated - so for anyone updating from 1.2.0.0, the colour live view and
+the optional built-in LibRaw decoder arrive here. Those, the sensor-table corrections and the
+release workflow are the work of [flexo-112](https://github.com/flexo-112), contributed in
+[#2](https://github.com/totoantibes/NinaLumixPlugin/pull/2). Thank you.
+
 - **The crash that took N.I.N.A. down mid-session is fixed, and the cause is now proven rather
   than guessed.** Panasonic's Tether DLL is not thread-safe on one session context: two
   overlapping calls deadlock it, and a single call landing inside an image transfer makes that
