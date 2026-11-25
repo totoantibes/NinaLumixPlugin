@@ -591,6 +591,15 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
             }
             _lastBatteryRefreshUtc = DateTime.UtcNow;
             _batteryPercent = InterpretBatteryReading(ok, level, levelAlt, head, err, rawHead);
+
+            // One line per refresh, unconditionally. The detailed line in InterpretBatteryReading fires only
+            // when the value changes, which was right when the getter was called thousands of times a session
+            // but hides the mechanism now that reads are throttled: a session on mains, or on a battery that
+            // stays at 100, would log one battery line at connect and nothing afterwards, leaving no way to
+            // tell from the log whether the refresh ran at all. At this interval it is about a dozen lines a
+            // session, which is worth being able to see it working.
+            Logger.Info($"[LumixBattery] refreshed: {(_batteryPercent < 0 ? "unknown" : _batteryPercent.ToString() + "%")}" +
+                        $"; next no sooner than {BATTERY_REFRESH_INTERVAL.TotalMinutes:0} min from now.");
         }
 
         private int InterpretBatteryReading(bool ok, uint level, uint levelAlt, uint head, uint err, string rawHead) {
