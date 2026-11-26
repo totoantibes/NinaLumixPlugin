@@ -57,7 +57,7 @@ This differs from the ASCOM Driver which interfaces over wifi and http. As the A
 
 Live view is shown in colour: the camera's live-view JPEG is re-mosaiced into a Bayer frame and debayered by N.I.N.A. like a normal capture (the same applies to JPEG captures when *Prefer JPEG* is enabled).
 
-The plugin runs in one of two modes, selected in the plugin options:
+The plugin runs in one of two modes, selected in the plugin options. **Changing the mode takes effect only after N.I.N.A. is restarted** - the two modes load different Panasonic DLLs, and the one bound at start-up cannot be swapped while N.I.N.A. is running, so reconnecting the camera is not enough:
 
 * Standard mode (default): uses the public Lumix SDK DLL that ships with the plugin. Exposures are limited to the camera's discrete shutter-speed list, max 60 s (the public SDK cannot do Bulb).
 * Extended mode (optional): loads the DLL from a local install of Panasonic's free [LUMIX Tether application](https://av.jpn.support.panasonic.com/support/global/cs/soft/download/d_lumixtether.html) (never bundled) to unlock capabilities the public SDK lacks.

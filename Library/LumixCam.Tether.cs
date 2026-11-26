@@ -121,18 +121,35 @@ namespace LumixWrapper {
         // the download completes. It gets the same treatment as the context and capability buffers above -
         // allocated once, pinned, and alive for the life of the process.
         //
-        // Growing it does NOT free the old one. A buffer the SDK may still hold a pointer to must stay valid
-        // forever, so retired handles are parked in _retiredObjPins and deliberately leaked.
+        // It is allocated ONCE, at a FIXED capacity, and never grown. That matters because a buffer the SDK
+        // may still hold a pointer to can never be freed, so growing it means retaining both - and an earlier
+        // version of this file did exactly that, parking retired pins in a list and leaking them. Measured on
+        // a 131-frame session (2026-11-25): RW2 size varies with scene content every frame, 18,681,856 to
+        // 19,097,600 bytes, so the buffer was replaced on every new maximum - 9 times in 131 frames, about
+        // 170 MB held for the life of the process. That grows like log(frames), which is not a bound, and the
+        // per-frame MAX_OBJECT_BYTES limit does not bound the total at all. Reported by the plugin-manifest
+        // maintainer on review, and he was right.
         //
-        // How much that leaks: one buffer per NEW MAXIMUM frame size, not one per body. RW2 size varies with
-        // scene content on every frame - a 131-frame session on 2026-11-25 ranged over 18,681,856 to
-        // 19,097,600 bytes - so the buffer is replaced each time a frame beats the largest seen so far. That
-        // is the number of record values in the sequence, which grows like log(frames): expect a handful a
-        // session, so of the order of 100 MB held for the life of the process. Bounded and acceptable, but
-        // not the single buffer an earlier version of this comment claimed.
+        // So the capacity is set once, from the connected camera's own sensor dimensions, and a frame that
+        // will not fit is refused rather than grown into. Total pinned memory is therefore one buffer, known
+        // at connect, whatever the session does afterwards.
         private static byte[] _objBacking;
         private static GCHandle _objPin;
-        private static readonly System.Collections.Generic.List<GCHandle> _retiredObjPins = new System.Collections.Generic.List<GCHandle>();
+        private static int _objCapacity;
+
+        /// <summary>Fixes the transfer buffer's capacity for this session. Call once, at connect, before any
+        /// transfer. Sizing comes from the camera rather than a constant so a 47 MP body is not refused and a
+        /// 10 MP body does not pin three times what it needs. Raising it later would mean a second buffer the
+        /// SDK might still be writing to, so it is deliberately set-once: a later call with a larger value is
+        /// honoured only while nothing has been transferred yet.</summary>
+        public static void SetObjectBufferCapacity(int bytes) {
+            if (bytes <= 0) { return; }
+            if (_objBacking != null) { return; }   // already in use; changing it now could orphan a live buffer
+            _objCapacity = bytes;
+        }
+
+        /// <summary>The capacity in force, for logging. 0 before it is set.</summary>
+        public static int ObjectBufferCapacity { get { return _objCapacity; } }
 
         /// <summary>The pinned object-transfer buffer, at least <paramref name="bytes"/> long. false if it
         /// could not be sized. The array is handed back so a caller can inspect the header without copying,
@@ -142,10 +159,20 @@ namespace LumixWrapper {
             buf = null;
             if (bytes == 0) { return false; }
             try {
-                if (_objBacking == null || _objBacking.Length < bytes) {
-                    if (_objPin.IsAllocated) { _retiredObjPins.Add(_objPin); }   // leaked on purpose; see above
-                    _objBacking = new byte[bytes];
+                if (_objBacking == null) {
+                    // Nobody set a capacity (standard mode, or a body whose dimensions are unknown): fall back
+                    // to one large enough for any Lumix RAW this plugin has seen, still allocated once.
+                    int cap = _objCapacity > 0 ? _objCapacity : DEFAULT_OBJ_CAPACITY;
+                    if (bytes > (uint)cap) { cap = (int)bytes; }   // first frame already bigger: honour it, once
+                    _objBacking = new byte[cap];
                     _objPin = GCHandle.Alloc(_objBacking, GCHandleType.Pinned);
+                    _objCapacity = cap;
+                }
+                if (bytes > (uint)_objBacking.Length) {
+                    // Refuse rather than grow. Growing would leave the old buffer pinned for ever, because the
+                    // SDK may still write into it - which is the leak this design exists to remove. The caller
+                    // fails the frame; a camera that legitimately needs more needs a bigger capacity at connect.
+                    return false;
                 }
                 buf = _objBacking;
                 return true;
@@ -153,6 +180,10 @@ namespace LumixWrapper {
                 return false;   // an allocation failure must not throw out of the SDK's callback thread
             }
         }
+
+        // 48 MB covers ~24 MP at 14 bits padded to 16, with room for the thumbnail and metadata an RW2 carries.
+        // Only used when the driver could not work out a capacity from the camera.
+        private const int DEFAULT_OBJ_CAPACITY = 48 * 1024 * 1024;
 
         private static void EnsureTetherBuffers() {
             lock (_sdkGate) {

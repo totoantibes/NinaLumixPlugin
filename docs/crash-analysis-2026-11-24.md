@@ -289,3 +289,221 @@ code and offset. The defect is that `LMX_func_api_Get_Object` can report failure
 an internal transfer outstanding, and the DLL then completes that transfer into a buffer it has
 already released.
 
+
+## Two further defects, found by testing the fix, 2026-11-26
+
+Both came out of verifying the plugin-manifest maintainer's review findings on the rig. Neither
+is the heap corruption above; both were found by the same method — drive the thing faster than a
+hand can, then read the ordering in the log.
+
+### A reconnect could race the previous disconnect's teardown
+
+`Disconnect()` returns as soon as it has *started* its native teardown, so that N.I.N.A.'s UI is
+never blocked by an SDK call that may stall. It kept no handle on that teardown, so nothing could
+wait for it.
+
+By hand this is safe, but only by luck: the teardown takes about 600 ms, and the gap between two
+clicks was 520 ms and 580 ms in two attempts, so it never overlapped. N.I.N.A.'s Advanced API
+reconnects within a millisecond, and then it overlaps every time. One reconnect was enough:
+
+| Time | Line |
+| --- | --- |
+| 11:44:48.3829 | `Disconnect: CloseSession` — the old teardown |
+| 11:44:48.3884 | `Connect: transfer buffer capacity ...` — the new session is already open |
+| 11:44:48.3885 | `Connect: Connected=True` |
+| 11:44:48.4022 | `Disconnect: CloseSession done; CloseDevice` |
+| 11:44:48.5334 | `Disconnect: CloseDevice done` |
+
+The old teardown closes the session and the device *after* the new `Connect` has opened them.
+N.I.N.A. then reports the camera connected on a session that no longer exists, and the next
+exposure dies with no driver log line at all — it surfaces only as N.I.N.A.'s own "did not set
+image as ready" timeout, 2.1 s into a 3 s exposure. Any such timeout that followed a quick
+reconnect is a candidate for this cause.
+
+Nothing crashed. The SDK gate still serialises the calls, so they never overlap inside the DLL:
+the damage is ordering, not concurrency. That distinction matters, because it means the gate was
+doing its job and the defect was above it.
+
+A control ruled out the alternative explanation before any of this was attributed to the race: a
+clean reconnect, with the teardown allowed to finish, followed by the identical API capture,
+produced a normal frame — bulb open, `Get_Object ret=1`, `magic=49 49 55 00`, saved.
+
+`Disconnect` now keeps its teardown task in a static field — the SDK has one process-wide
+session, so a teardown left by one driver instance must hold up the next instance's connect — and
+`Connect` waits for it, bounded at 15 s, before touching the SDK. Verified: four zero-gap
+reconnects, waits of 357, 501, 480 and 483 ms logged, `CloseDevice` finishing before Connect's
+first native call in every case, and all four following exposures saved.
+
+One variant remains unreachable on this rig: live view *running* when a zero-gap reconnect lands.
+The Advanced API has no live-view endpoint, so the only thing fast enough to hit the race cannot
+start live view. The teardown stops live view as its first step and the new wait covers the whole
+teardown, so that path sits inside the window the fix protects — but that is read from the code,
+not measured.
+
+### Card state is cached for the life of the process, and not by this plugin
+
+With the card pulled while N.I.N.A. was running, `Ext_TryGetFreeSpaceInImages` and
+`Ext_TryGetStatusOfCards` kept returning the card-present answer: status `0x00010002` and the
+same 1404 frames as when the card was in. A full reconnect did not refresh it, although that
+closes and reopens both the device and the session. Restarting N.I.N.A. did: the same empty slot
+then read status `0x00000002` and `0xFFFFFFFF`, and the no-card warning fired correctly.
+
+So the staleness is in the Tether DLL at process scope. There is nothing to fix in the plugin — a
+card removed or inserted mid-session cannot be noticed — which is why `DescribeCardForFailure()`
+is worded "was last reported" and must stay in that tense.
+
+This also cost the attempt to provoke a failed frame. With the body genuinely reporting no card
+and the save target on PC+SD, the GH5S still delivers the frame to the PC: 18,667,520 bytes,
+`magic=49 49 55 00`, saved. The only observable difference is `[LumixBulb] open (0x12) ret=2`
+rather than `ret=1`, on both card-out frames, and the capture proceeds regardless.
+
+**So the `FailExposure` path is unexercised on this hardware.** Card removal does not make this
+body offer an object with no data, and the other trigger — an object that is not a usable image —
+needs the SDK collision that the gate now prevents by design. Both are covered statically only.
+That is a gap in the evidence, stated rather than papered over: if a body exists that announces a
+placeholder object or refuses a cardless transfer, the path wants testing there.
+
+#### Why the empty-object guard could not be provoked at all
+
+Two save-target configurations were tried on a GH5S with the slot genuinely empty, the body
+reporting status 0x00000002 and 0xFFFFFFFF both times.
+
+| Save target | What the camera did |
+| --- | --- |
+| PC+SD | delivered the frame to the PC regardless: 18,667,520 bytes, magic 49 49 55 00, saved |
+| SD only | raised NO object event at all; the exposure ended on N.I.N.A.s own exposure+20s timeout, with no [LumixCapture] line in the log |
+
+The only difference an absent card made to a capture was bulb open returning ret=2 instead of
+ret=1, on every card-out frame, with the capture proceeding normally.
+
+So an absent card does not produce an object that holds no data. The guards own comment records
+the condition that did: a FULL card, where the write has somewhere to go and nothing fits. That
+cannot be arranged on this rig without a small or nearly-full card in the body.
+
+A refusal at exposure time was considered and rejected. The plugin does know at connect that the
+slot is empty and the save target writes to it - that is what the existing warning says. But the
+card reading is cached at process scope, as measured above, so the belief can be stale in BOTH
+directions: a card inserted mid-session would still read as absent, and a hard refusal would then
+block valid exposures. Waiting 20s for a frame that will not come is the lesser failure. The
+warning plus N.I.N.A.s timeout is the behaviour that stays.
+
+### What needs a restart of N.I.N.A., and what does not
+
+Three settings look alike and are not, which cost time on 2026-11-26. Measured, not assumed:
+
+| Setting | Takes effect on | Evidence |
+| --- | --- | --- |
+| Save target (PC / SD / PC+SD) | a RECONNECT | settled by the OBJECT HANDLE, not by whether an image arrives. One process: 13 frames on target 1 all raised 0x12345678, the cardless PC transfer handle; the next frame after a reconnect applied target 0 raised real card objects (0x11434000, 0x19434EA2) instead. The camera changed behaviour with no restart |
+| Extended vs standard mode | a RESTART | the mode is bound once, in the providers constructor, and the first P/Invoke caches the resolved native handle for the whole assembly, with no public API to drop it |
+| What the camera reports about the card | believe it only on the FIRST connect of the process | after a session is reopened the reading is intermittently wrong, and wrong in more than one way - see the section below. The free count itself is live |
+
+The save target is written in Connect, and the camera acts on it from that point. Getting to
+that answer took two wrong turns worth recording, because both are easy to repeat.
+
+The first was citing a frame taken with NO CARD in the body as confirmation that PC+SD had been
+applied. With an empty slot, PC+SD and PC-only behave identically, so it confirmed nothing.
+
+The second was the test designed to settle it: set SD only, reconnect, and expect NO image to
+reach N.I.N.A. if the camera honoured it. That assumption was wrong. With SD only the camera
+writes to the card and raises OBJCT_ADD, and the driver pulls that object and hands it to
+N.I.N.A. just the same - so an image arrives either way and the test cannot discriminate.
+
+What does discriminate is the OBJECT HANDLE in the [LumixCapture] line. A PC transfer is always
+0x12345678, LMX_DEF_OBJ_CARDLESS_TRNSFER_HDL. A card object is a real handle. Read that, not
+whether a frame appeared.
+
+The other two rows are process-scoped and cannot be changed while N.I.N.A. runs. The plugin now warns at connect when
+the mode setting and the loaded mode disagree, because that one used to present as a 120s
+exposure timing out with nothing in the log to explain it.
+
+### The placeholder object, caught live
+
+The SD-only frame above also produced the first hardware sighting of the object the
+unusable-image guard exists for:
+
+    13:46:56.6114  object=0x11434000 format=0x3 size=131072
+    13:47:03.6045  Get_Object ret=0 err=0; magic=49 49 55 00
+    13:47:03.6050  WARNING  object 0x11434000 is not a usable image (ret=0, format=0x3,
+                            size=131072) - ignoring, waiting for the real frame
+    13:47:04.1992  object=0x19434EA2 format=0x2 size=18678272
+    13:47:04.9731  Get_Object ret=1 err=0; magic=49 49 55 00   -> saved
+
+A 128 KB format-0x3 object, exactly as the code comment describes, ignored, with the real frame
+arriving 0.6 s later and saving normally. The non-terminal branch of the bounded wait therefore
+works on hardware; the terminal branch, failing the frame, still has not fired here.
+
+It also shows why the header check cannot stand alone. The magic read 49 49 55 00 - a VALID RW2
+header - because Get_Object wrote nothing and the shared pinned buffer still held the previous
+frame's bytes. Only ret=0 caught it. Code that trusted the header would have handed N.I.N.A. the
+previous frame a second time.
+
+That Get_Object took 7.0 s to return 0. Noted, not explained, and deliberately NOT attributed to
+the collision documented earlier in this file: same symptom, different trigger, no evidence
+connecting them.
+
+### The card reading cannot be believed after a reconnect
+
+This began as "the reading is cached at process scope", on the strength of one measurement. That
+characterisation was wrong, and the fuller set of measurements is worth keeping because the wrong
+version nearly shipped a bug.
+
+All on one GH5S on 2026-11-26, with the card's physical state known at each point:
+
+| Time | Connect kind | Card physically | Status word | Free frames | Verdict |
+| --- | --- | --- | --- | --- | --- |
+| 12:08:21 | reconnect | OUT | 0x10002 | 1404 | WRONG - stale present |
+| 12:16:40 | first of process | OUT | 0x2 | 0xFFFFFFFF | correct |
+| 14:09:36 | first of process | IN | 0x10002 | 1404 | correct |
+| 14:15:38 | first of process | IN | 0x10002 | 1404 | correct |
+| 14:20:27 | reconnect | IN | 0x2 | 0xFFFFFFFF | WRONG - reads as empty |
+| 14:36:05 | first of process | IN | 0x10002 | 1403 | correct |
+| 14:38:49 | reconnect | IN | 0x10002 | 1402 | correct |
+
+Three things follow, and only the first was in the earlier version of this file.
+
+**A reconnect reading is not trustworthy.** Every wrong reading came after a session was reopened,
+and every first-connect reading was right.
+
+**It is wrong in two different ways,** which rules out simple caching. At 12:08 it answered stale
+present with a plausible count while the slot was empty. At 14:20 it answered 0x2 / 0xFFFFFFFF -
+byte-identical to the genuine empty slot at 12:16 - while a card was in. So "there is no card" and
+"this session cannot say" cannot be told apart.
+
+**It is intermittent, not consistent.** The reconnect at 14:38:49 answered correctly. A signal that
+is usually right and occasionally indistinguishably wrong is the worst kind to act on, and acting
+on it is exactly what cost a build: a PC fallback gated on an apparently empty slot overrode a
+perfectly good card at 14:20 and silently stopped writing to it.
+
+**The free count itself is live.** It read 1404, then 1403 after one frame went to the card, then
+1402 after another. The earlier claim that it was cached was wrong; what fails is the whole read,
+not the freshness of the number.
+
+### Falling back to PC when the card cannot be written
+
+With the save target on SD only and an empty slot, the camera raises no object event at all, so
+every exposure runs to N.I.N.A.'s own exposure+20s timeout and the session produces nothing. The
+plugin now resolves the save target before setting it, and falls back to PC for that session when
+the card demonstrably cannot be written.
+
+Two limits, both of which come from the table above:
+
+**Only on the first connect of the process.** Both places that act on an apparently empty slot are
+gated on it - the fallback, and the pre-existing "there is no card in the camera" warning, which
+was firing spuriously on reconnects before this branch existed. This costs the fallback nothing,
+because the case it exists for is a card absent or full when N.I.N.A. starts, and that IS the first
+connect.
+
+**The stored setting is never changed.** The override lasts for the session, so the user's choice
+survives, and the warning names the restart needed to use the card again.
+
+Verified on a GH5S:
+
+| Configuration | Result |
+| --- | --- |
+| Card out, SD only, first connect | fallback fired, target 1 forced, frame arrived via 0x12345678 and saved - where the same configuration previously produced no frame at all |
+| Card in, SD only, first connect then a reconnect | no fallback either time, target 0 both times, both frames via real card objects (0x19434EA4, 0x19434EA5) |
+
+One earlier observation is refined here too. `[LumixBulb] open` returning ret=2 rather than ret=1
+was noted as tracking card absence. It does not: ret=2 appeared only on the two PC+SD frames taken
+with no card, while SD-only-with-no-card and the PC fallback both gave ret=1. It looks like "the
+target includes the card and the card is unusable" - two samples, so a correlation and not a law.

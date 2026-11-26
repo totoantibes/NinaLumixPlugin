@@ -72,6 +72,22 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
         // uninitialised out-param from an object the camera cannot serve, not a photograph.
         private const uint MAX_OBJECT_BYTES = 256u * 1024u * 1024u;
 
+        // An object the camera offers that turns out not to be an image is normally harmless: on the first
+        // frame of a session the body can announce a placeholder, and the real frame follows on the next
+        // event. The driver ignored those and kept waiting - but if the real frame never came it kept waiting
+        // for ever, and the exposure only ended when N.I.N.A. gave up on its own timeout, exposure + 20 s.
+        // That is what the 2026-11-24 09:55:05 "Camera did not set image as ready" line was. Reported by the
+        // plugin-manifest maintainer on review.
+        //
+        // So the wait is now bounded: the first unusable object starts a clock and the frame is failed if no
+        // usable one arrives inside it, or if too many arrive. Ten seconds is far longer than a transfer needs
+        // (observed 130-200 ms) and far shorter than N.I.N.A.'s own timeout, so the sequence gets a clean
+        // capture error and moves on instead of stalling.
+        private static readonly TimeSpan UNUSABLE_OBJECT_GRACE = TimeSpan.FromSeconds(10);
+        private const int UNUSABLE_OBJECT_LIMIT = 4;
+        private DateTime _firstUnusableUtc = DateTime.MinValue;
+        private int _unusableCount;
+
         // The native SDK calls this from its own thread: it is a reverse P/Invoke, so a managed exception must
         // NEVER leave this method. Unwinding into the SDK's native frame is undefined behaviour and takes the
         // whole NINA process down — Windows reports it as an access violation in the C runtime, with no managed
@@ -139,6 +155,16 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
         private uint? _lastKnownCardStatus;
         private bool _recheckCardCapacity;
 
+        // The save target actually in force for this session, which is not always the one the user asked
+        // for - see ResolveSaveTarget. Anything that reasons about where frames are going must read this,
+        // not Settings.Default.SaveTarget, or it will warn about a card problem that has been worked around.
+        private ushort _effectiveSaveTarget = LumixCam.SAVE_TARGET_PC;
+
+        // Has this PROCESS connected once already? The card reading is only trustworthy on the first
+        // connect; see CardReadingIsTrustworthy. Static, because the reading is a property of the loaded
+        // DLL and not of a driver instance.
+        private static bool _processHasConnectedBefore;
+
         // A flat set is 21 frames and a night of subs is hundreds, so fewer than this is worth saying out loud
         // before the session starts rather than discovering at 3 a.m.
         private const uint LOW_CARD_FRAMES = 50;
@@ -155,6 +181,28 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
         // existed. With a card in, the same call returned 2576 — a real count, whatever the save target.
         private const uint CARD_FRAMES_IMPLAUSIBLE = 1000000;
 
+        // THIS READING CANNOT BE BELIEVED AFTER A RECONNECT. Measured on a GH5S on 2026-11-26, physical card
+        // state known at each point:
+        //
+        //   12:08:21  reconnect          card OUT   status 0x10002, 1404 frames   WRONG, stale present
+        //   12:16:40  first of process   card OUT   status 0x2, 0xFFFFFFFF        correct
+        //   14:15:38  first of process   card IN    status 0x10002, 1404 frames   correct
+        //   14:20:27  reconnect          card IN    status 0x2, 0xFFFFFFFF        WRONG, reads as empty
+        //   14:38:49  reconnect          card IN    status 0x10002, 1402 frames   correct
+        //
+        // So it is wrong in BOTH directions, and only intermittently - a reconnect is sometimes right. The
+        // 14:20 answer is byte-identical to the genuine empty slot at 12:16, so "there is no card" and "this
+        // session has just reopened and cannot say" cannot be told apart. Anything that acts on an apparently
+        // empty slot must gate on CardReadingIsTrustworthy; a fallback that did not do so overrode a working
+        // card at 14:20 and silently stopped writing to it.
+        //
+        // The free COUNT is live, not cached - it read 1404, 1403, 1402 as frames were written to the card. An
+        // earlier version of this comment claimed the whole reading was cached at process scope. That was one
+        // measurement generalised too far. What fails is the read itself, not the freshness of the number.
+        //
+        // DescribeCardForFailure is worded "was last reported" because of all this - do not promote it to the
+        // present tense.
+
         private uint? ReadCardFreeFrames() {
             bool ok = LumixCam.Ext_TryGetFreeSpaceInImages(out uint images, out uint spaceErr, out string spaceRaw);
             bool statusOk = LumixCam.Ext_TryGetStatusOfCards(out uint status, out uint statusErr, out string statusRaw);
@@ -165,7 +213,8 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
                 return null;
             }
             if (images == LumixCam.CARD_FRAMES_NO_NUMBER || images >= CARD_FRAMES_IMPLAUSIBLE) {
-                Logger.Info($"[LumixCard] the camera gave no usable frame count (0x{images:X8}); card status=0x{status:X} (space bytes={spaceRaw}, status bytes={statusRaw}).");
+                Logger.Info($"[LumixCard] the camera gave no usable frame count (0x{images:X8}); card status=0x{status:X} (space bytes={spaceRaw}, status bytes={statusRaw})." +
+                        (CardReadingIsTrustworthy ? "" : " This is a reconnect, so this reading is NOT evidence about the card - a session that has just reopened answers exactly like an empty slot."));
                 _lastKnownCardFreeFrames = null;
                 return null;
             }
@@ -174,17 +223,79 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
             return images;
         }
 
-        // Read the card and say so where NINA shows it. Only warns when the save target actually writes to the
-        // card — on PC-only the card's state does not matter.
+        // Read the card and say so where NINA shows it.
         private void ReportCardCapacity(ushort saveTarget) {
+            WarnAboutCard(saveTarget, ReadCardFreeFrames());
+        }
+
+        // Can the card reading be believed? Only on the first connect of the process.
+        //
+        // Measured on a GH5S on 2026-11-26, one N.I.N.A. process, the card physically in the body the whole
+        // time:
+        //   14:15:38  first connect after a restart   status bytes 02-00-01-00 -> 0x10002, 1404 frames  CORRECT
+        //   14:20:27  after a plain disconnect/connect status bytes 02-00-00-00 -> 0x2, 0xFFFFFFFF      WRONG
+        // and earlier the same day, in the other direction, with the card physically OUT:
+        //   12:08:21  after a reconnect                status 0x10002, 1404 frames                      WRONG
+        //   12:16:40  first connect after a restart    status 0x2, 0xFFFFFFFF                           CORRECT
+        //
+        // The 14:20 reading is byte-identical to the genuine empty-slot reading at 12:16, so "there is no card"
+        // and "this session is too young to say" CANNOT BE TOLD APART. Any code that acts on an apparently
+        // empty slot must therefore refuse to act on a reconnect, or it will override a perfectly good card -
+        // which is exactly what happened at 14:20 before this check existed.
+        //
+        // This also covers a false warning that predates the fallback: ReportCardCapacity would announce "there
+        // is no card in the camera - captures will fail" on that same reconnect.
+        private static bool CardReadingIsTrustworthy => !_processHasConnectedBefore;
+
+        // Decide the save target for this session, reading the card once.
+        //
+        // When the user asked for a target that writes to the card and the camera says, unambiguously, that it
+        // cannot be written, fall back to PC so the capture works instead of failing. With SD only and an empty
+        // slot the camera raises NO object event at all - measured on a GH5S on 2026-11-26 - so every exposure
+        // runs to NINA's own exposure+20s timeout and the session produces nothing at all. With PC+SD the frame
+        // reaches the PC regardless, so there the fallback only avoids a card write that would fail.
+        //
+        // Only on UNAMBIGUOUS evidence: a status word that says the slot is empty, or a free count the camera
+        // gives as exactly zero. "The camera would not say" is NOT evidence of absence and must never trigger
+        // this - a reading the body withholds is the one case where guessing would do harm.
+        //
+        // The stored setting is deliberately NOT changed: the user's choice survives, and the override lasts
+        // only for this session. It cannot do better than that, because the Tether DLL caches the card reading
+        // for the life of the process - see ReadCardFreeFrames - so a card inserted after NINA started still
+        // reads as absent and the fallback would stay in force. That is why the warning names the restart.
+        private ushort ResolveSaveTarget(ushort wanted) {
             uint? free = ReadCardFreeFrames();
+            bool slotEmpty = CardReadingIsTrustworthy
+                             && _lastKnownCardStatus.HasValue
+                             && !LumixCam.CardPresent(_lastKnownCardStatus.Value);
+            bool cardFull = free.HasValue && free.Value == 0;
+            if (!SaveTargetUsesCard(wanted) || (!slotEmpty && !cardFull)) {
+                WarnAboutCard(wanted, free);
+                return wanted;
+            }
+            string why = slotEmpty ? "there is no card in the camera" : "the camera's SD card is full";
+            Logger.Warning($"[LumixCard] the save target asks to write to the SD card, but {why}. Falling back to " +
+                           "PC for this session so captures still work. The plugin setting is unchanged; restart " +
+                           "N.I.N.A. after fixing the card to use the card again.");
+            try {
+                Notification.ShowWarning($"Lumix: {why}, so this session saves to the PC only." + Environment.NewLine +
+                                         "Your save-target setting is unchanged. Restart N.I.N.A. after fixing the card.");
+            } catch { }
+            return LumixCam.SAVE_TARGET_PC;
+        }
+
+        // Say where NINA shows it what the card reading means. Only warns when the target in force actually
+        // writes to the card - on PC-only the card's state does not matter.
+        private void WarnAboutCard(ushort saveTarget, uint? free) {
             if (!SaveTargetUsesCard(saveTarget)) { return; }
             if (free == null) {
                 // No usable count AND the save target writes to the card: the camera has somewhere it is meant
                 // to write and cannot tell us there is room. The status word separates the two causes — an empty
                 // slot reads 0x00000002 and a card in the slot 0x00010002 — so name which one it is, falling
                 // back to the vaguer wording when the status word is missing or in some third state.
-                bool slotEmpty = _lastKnownCardStatus.HasValue && !LumixCam.CardPresent(_lastKnownCardStatus.Value);
+                bool slotEmpty = CardReadingIsTrustworthy
+                                 && _lastKnownCardStatus.HasValue
+                                 && !LumixCam.CardPresent(_lastKnownCardStatus.Value);
                 string reason = slotEmpty
                     ? "there is no card in the camera"
                     : "the camera reports no usable capacity for the card";
@@ -276,7 +387,11 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
             // check, and only for a frame that proved usable — see the copy-out comment there for why NINA
             // cannot be handed the shared transfer buffer itself.
             if (!LumixCam.TryGetObjectBuffer(dataSize, out byte[] xfer)) {
-                Logger.Warning($"[LumixCapture] could not obtain a {dataSize}-byte transfer buffer; failing this frame.");
+                // Either the allocation failed, or the frame is larger than the capacity fixed at connect. The
+                // buffer is deliberately never grown - see TryGetObjectBuffer - so this is a failed frame
+                // rather than a bigger allocation.
+                Logger.Warning($"[LumixCapture] could not obtain a {dataSize}-byte transfer buffer " +
+                               $"(session capacity {LumixCam.ObjectBufferCapacity} bytes); failing this frame.");
                 ReleasePendingTransfer(cb_event_param);
                 FailExposure($"Could not allocate a {dataSize}-byte buffer for the frame.");
                 return;
@@ -293,8 +408,24 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
             // complete the download once we've actually pulled a recognisable image; otherwise ignore this object
             // and keep awaiting the real frame — the valid RW2/JPEG arrives on the next OBJCT event.
             if (gr != LMX_BOOL_TRUE || !IsKnownImageHeader(xfer, dataSize)) {
-                Logger.Warning($"[LumixCapture] object 0x{cb_event_param:X} is not a usable image (ret={gr}, format=0x{formatType:X}, size={dataSize}) — ignoring, waiting for the real frame.");
                 ReleasePendingTransfer(cb_event_param);
+
+                _unusableCount++;
+                if (_firstUnusableUtc == DateTime.MinValue) { _firstUnusableUtc = DateTime.UtcNow; }
+                TimeSpan waited = DateTime.UtcNow - _firstUnusableUtc;
+
+                if (waited > UNUSABLE_OBJECT_GRACE || _unusableCount >= UNUSABLE_OBJECT_LIMIT) {
+                    // Terminal: stop waiting for a frame that is not coming and let the sequence see a capture
+                    // error now, rather than stalling until N.I.N.A.'s exposure+20s timeout fires.
+                    Logger.Error($"[LumixCapture] giving up on this frame: {_unusableCount} unusable object(s) " +
+                                 $"in {waited.TotalSeconds:0.0}s, the last one ret={gr}, format=0x{formatType:X}, size={dataSize}. " +
+                                 "Failing the exposure so the sequence can continue.");
+                    FailExposure("The camera did not deliver a usable image for this exposure." + DescribeCardForFailure());
+                    return;
+                }
+
+                Logger.Warning($"[LumixCapture] object 0x{cb_event_param:X} is not a usable image (ret={gr}, format=0x{formatType:X}, size={dataSize}) — ignoring, waiting for the real frame " +
+                               $"({_unusableCount} so far, {(UNUSABLE_OBJECT_GRACE - waited).TotalSeconds:0.0}s left before this frame is failed).");
                 return;   // do NOT complete the exposure with junk data
             }
 
@@ -832,17 +963,31 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
 
         private Task bulbCompletionTask = null;
 
+        // The teardown Disconnect() starts in the background, kept so that the next Connect can wait for it.
+        // Static on purpose: the SDK has ONE process-wide session, so a teardown left running by one driver
+        // instance must still hold up the next instance's Connect.
+        private static Task _teardownTask = null;
+
+        // How long Connect will wait for that teardown. The teardown's own waits are bounded - a 3 s wait on
+        // the bulb completion, a 400 ms settle, then the SDK closes - so this only has to be comfortably
+        // larger than that, and bounded so a stalled SDK call cannot wedge Connect for ever.
+        private const int TEARDOWN_WAIT_MS = 15000;
+
         public void StartExposure(CaptureSequence sequence) {
             if (Connected) {
                 // Captured before the cancellation below, and used only by the battery refresh: an exposure
                 // that gets cancelled here can leave a transfer outstanding, and that is exactly when a second
                 // request must not go on the channel.
                 bool idleOnEntry = _downloadExposure == null || _downloadExposure.Task.Status > TaskStatus.Running;
+
+                // Per-exposure, not per-session: a placeholder on one frame must not count against the next.
+                _firstUnusableUtc = DateTime.MinValue;
+                _unusableCount = 0;
                 if (_recheckCardCapacity) {
                     // The previous frame came back empty. Re-read the card here, on NINA's thread, so the next
                     // failure message carries a current number instead of the one from connect.
                     _recheckCardCapacity = false;
-                    ReportCardCapacity((ushort)Properties.Settings.Default.SaveTarget);
+                    ReportCardCapacity(_effectiveSaveTarget);
                 }
                 if (_downloadExposure != null && _downloadExposure.Task.Status <= TaskStatus.Running) {
                     Notification.ShowWarning("Another exposure still in progress. Cancelling it to start another.");
@@ -1242,6 +1387,59 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
         public Task<bool> Connect(CancellationToken token) {
             return Task.Run<bool>(() => {
                 try {
+                    // Does the options setting still match the mode this process actually loaded? The mode is
+                    // bound once, when N.I.N.A. starts: NativeBinding.Initialize runs in the provider's
+                    // constructor and the first P/Invoke caches the resolved native handle for the whole
+                    // assembly, with no public API to drop it. So toggling the setting and reconnecting cannot
+                    // change anything - and on 2026-11-26 that presented as 120 s exposures timing out with
+                    // nothing in the log to explain it.
+                    //
+                    // This check lives HERE, in Connect, and not in the provider's constructor: an earlier
+                    // version put it there, where Initialize has just set ExtendedMode from this very setting,
+                    // so the two always agreed and the warning could never fire. Connect is what a reconnect
+                    // calls, which is when the user is actually waiting to find out.
+                    if (Properties.Settings.Default.UseTetherExtended != NativeBinding.ExtendedMode) {
+                        string want = Properties.Settings.Default.UseTetherExtended ? "extended (LUMIX Tether)" : "standard (public SDK)";
+                        string have = NativeBinding.ExtendedMode ? "extended (LUMIX Tether)" : "standard (public SDK)";
+                        Logger.Warning($"Lumix: the plugin options ask for {want} mode but this N.I.N.A. session " +
+                                       $"loaded {have} mode. The mode is bound at start-up and cannot be changed " +
+                                       "while N.I.N.A. runs, so reconnecting will not apply it. Restart N.I.N.A.");
+                        try {
+                            Notification.ShowWarning($"Lumix: {want} mode needs a N.I.N.A. restart." + Environment.NewLine +
+                                                     $"Still running in {have} mode until then.");
+                        } catch { }
+                    }
+
+                    // Wait for a teardown left running by a previous Disconnect before touching the SDK.
+                    // Disconnect returns as soon as it has STARTED its teardown, so a fast reconnect - and
+                    // N.I.N.A.'s Advanced API can issue one within a millisecond - used to open a new session
+                    // while the old teardown was still on its way to CloseSession/CloseDevice. Those then closed
+                    // the session this Connect had just opened: N.I.N.A. reported the camera connected, and the
+                    // next exposure died with no driver log line at all, surfacing only as N.I.N.A.'s own
+                    // "did not set image as ready" timeout. Measured on this rig on 2026-11-26: CloseSession at
+                    // 11:44:48.3829, Connect reporting Connected=True at .3885, CloseDevice finishing at .5334,
+                    // and the 3 s exposure three seconds later dead. One reconnect was enough to do it.
+                    Task pendingTeardown = _teardownTask;
+                    if (pendingTeardown != null && !pendingTeardown.IsCompleted) {
+                        var teardownWait = System.Diagnostics.Stopwatch.StartNew();
+                        Logger.Info("[Lumix] Connect: a teardown from the previous disconnect is still running; waiting for it.");
+                        bool finished;
+                        try {
+                            finished = pendingTeardown.Wait(TEARDOWN_WAIT_MS);
+                        } catch (Exception tx) {
+                            // The teardown faulted. That is its own business - it logs its own errors - and the
+                            // only thing that matters here is that it is no longer running.
+                            Logger.Info("[Lumix] Connect: the previous teardown ended with an error: " + tx.Message);
+                            finished = true;
+                        }
+                        if (finished) {
+                            Logger.Info($"[Lumix] Connect: previous teardown finished after {teardownWait.ElapsedMilliseconds} ms; connecting.");
+                        } else {
+                            Logger.Warning($"[Lumix] Connect: the previous teardown has not finished after {TEARDOWN_WAIT_MS} ms. " +
+                                           "Connecting anyway - an SDK call is stalled, and if this connection misbehaves, restart N.I.N.A.");
+                        }
+                    }
+
                     //connect to device
                     if (NativeBinding.ExtendedMode) {
                         _connected = LumixCam.Ext_Connect(_index, out retError);
@@ -1291,10 +1489,16 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
                     // Save destination (extended mode only): SD only / PC only (cardless) / PC+SD. With a PC
                     // target the camera fires OBJCT_REQ_TRNSFER on capture and we pull the frame via Get_Object.
                     if (NativeBinding.ExtendedMode) {
-                        ushort saveTgt = (ushort)Properties.Settings.Default.SaveTarget;
+                        // Resolve before setting, not after: ResolveSaveTarget reads the card and may fall back
+                        // to PC, and the camera must be given the target that is actually going to be used.
+                        ushort wantedTgt = (ushort)Properties.Settings.Default.SaveTarget;
+                        ushort saveTgt = ResolveSaveTarget(wantedTgt);
+                        _effectiveSaveTarget = saveTgt;
+                        // From here on the card reading is a reconnect reading, and not to be believed.
+                        _processHasConnectedBefore = true;
                         LumixCam.LMX_func_api_SetupFilesConfig_Set_Target(saveTgt, out retError);
-                        Logger.Info($"Save target set to {saveTgt} (0=SD,1=PC,2=PC+SD), err={LumixError.Describe(retError)}.");
-                        ReportCardCapacity(saveTgt);
+                        Logger.Info($"Save target set to {saveTgt} (0=SD,1=PC,2=PC+SD), err={LumixError.Describe(retError)}." +
+                                    (saveTgt != wantedTgt ? $" The setting asked for {wantedTgt}; fell back to PC because the card cannot be written." : ""));
                         // The session's first battery read, taken here because the channel is quiet at connect.
                         // It also starts the refresh interval, so the first exposure does not immediately read
                         // again; after this the only reads are the throttled idle-point refreshes. See the
@@ -1343,6 +1547,22 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
                         Notification.ShowWarning("Overriding Width from Plugin Settings");
                     }
 
+                    // Fix the transfer buffer's capacity for the session, now that the sensor is known - this
+                    // has to come AFTER the specs table and the user's overrides above, because an earlier
+                    // version of this sat before them and sized from 0x0, silently falling back to the
+                    // default. 2 bytes per pixel covers 14-bit samples padded to 16, plus 16 MB for the
+                    // thumbnail and metadata an RW2 carries. Set once; never grown, because a buffer the SDK
+                    // may still be writing into can never be freed.
+                    int capPx = _currentCameraspecs.Width * _currentCameraspecs.Height;
+                    if (capPx > 0) {
+                        long cap = (long)capPx * 2L + 16L * 1024L * 1024L;
+                        if (cap > MAX_OBJECT_BYTES) { cap = MAX_OBJECT_BYTES; }
+                        LumixCam.SetObjectBufferCapacity((int)cap);
+                    }
+                    Logger.Info($"Transfer buffer capacity for this session: {LumixCam.ObjectBufferCapacity} bytes " +
+                                $"(sensor {_currentCameraspecs.Width}x{_currentCameraspecs.Height}" +
+                                (capPx > 0 ? ")." : ", unknown - using the built-in default)."));
+
                     //not useful in Nina context
                     //returnV = LumixCam.LMX_func_api_Reg_NotifyCallback((uint)Lmx_event_id.LMX_DEF_LIB_EVENT_ID_APERTURE, callback);
                     //returnV = LumixCam.LMX_func_api_Reg_NotifyCallback((uint)Lmx_event_id.LMX_DEF_LIB_EVENT_ID_WHITEBALANCE, callback);
@@ -1368,7 +1588,7 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
             // Native teardown is fire-and-forget: some SDK calls (CloseSession after a bulb) can block for a long
             // time, and we must never freeze NINA. If a call stalls it leaks a worker thread, but the UI stays
             // responsive. Each step is logged so the last line before it stops shows which call stalls.
-            Task.Run(() => {
+            _teardownTask = Task.Run(() => {
                 try {
                     // Live view first. Disconnect used to go straight to Delete_CallBackInfo and CloseSession
                     // with the SDK's live-view thread still running and still writing into session memory the
