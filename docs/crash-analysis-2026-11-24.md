@@ -393,11 +393,22 @@ Three settings look alike and are not, which cost time on 2026-11-26. Measured, 
 
 | Setting | Takes effect on | Evidence |
 | --- | --- | --- |
-| Save target (PC / SD / PC+SD) | a RECONNECT | one process, six connects: target 1 on five of them, then target 2 at 12:08:21 after the option was changed, and the next frame behaved as PC+SD |
+| Save target (PC / SD / PC+SD) | UNVERIFIED - may need a RESTART | the plugin WRITES it on a reconnect: one process, six connects, target 1 on five of them then target 2 at 12:08:21 after the option was changed, with err=NO_ERROR. Whether the camera HONOURS it on a reconnect is not established - the frame that followed was taken with no card, where PC+SD and PC-only are indistinguishable |
 | Extended vs standard mode | a RESTART | the mode is bound once, in the providers constructor, and the first P/Invoke caches the resolved native handle for the whole assembly, with no public API to drop it |
 | What the camera reports about the card | a RESTART | the card reading is cached in the Tether DLL at process scope: a card pulled mid-session kept reading as present across a full reconnect, and only a restart read the empty slot |
 
-The save target is written in Connect, which is why a reconnect carries it. The other two are
-process-scoped and cannot be changed while N.I.N.A. runs. The plugin now warns at connect when
+The save target is written in Connect, so a reconnect at least delivers the new value to the
+SDK without error. That is not the same as the camera acting on it, and the distinction was
+blurred once already in this document: the frame cited as confirmation had no card in the body,
+where PC+SD and PC-only behave identically. Given that the DLL caches the card state for the
+life of the process, it may well cache this too.
+
+The test that would settle it needs no card inspection: with a card IN, set the save target to
+SD only and RECONNECT without restarting, then take one frame. If the camera honours it, no
+image reaches N.I.N.A. and the exposure ends on its timeout. If the camera ignores it and stays
+on PC, the frame arrives normally. Until that has been run, treat a save-target change as
+needing a restart.
+
+The other two rows are process-scoped and cannot be changed while N.I.N.A. runs. The plugin now warns at connect when
 the mode setting and the loaded mode disagree, because that one used to present as a 120s
 exposure timing out with nothing in the log to explain it.
