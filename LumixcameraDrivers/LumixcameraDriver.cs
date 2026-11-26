@@ -72,6 +72,22 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
         // uninitialised out-param from an object the camera cannot serve, not a photograph.
         private const uint MAX_OBJECT_BYTES = 256u * 1024u * 1024u;
 
+        // An object the camera offers that turns out not to be an image is normally harmless: on the first
+        // frame of a session the body can announce a placeholder, and the real frame follows on the next
+        // event. The driver ignored those and kept waiting - but if the real frame never came it kept waiting
+        // for ever, and the exposure only ended when N.I.N.A. gave up on its own timeout, exposure + 20 s.
+        // That is what the 2026-11-24 09:55:05 "Camera did not set image as ready" line was. Reported by the
+        // plugin-manifest maintainer on review.
+        //
+        // So the wait is now bounded: the first unusable object starts a clock and the frame is failed if no
+        // usable one arrives inside it, or if too many arrive. Ten seconds is far longer than a transfer needs
+        // (observed 130-200 ms) and far shorter than N.I.N.A.'s own timeout, so the sequence gets a clean
+        // capture error and moves on instead of stalling.
+        private static readonly TimeSpan UNUSABLE_OBJECT_GRACE = TimeSpan.FromSeconds(10);
+        private const int UNUSABLE_OBJECT_LIMIT = 4;
+        private DateTime _firstUnusableUtc = DateTime.MinValue;
+        private int _unusableCount;
+
         // The native SDK calls this from its own thread: it is a reverse P/Invoke, so a managed exception must
         // NEVER leave this method. Unwinding into the SDK's native frame is undefined behaviour and takes the
         // whole NINA process down — Windows reports it as an access violation in the C runtime, with no managed
@@ -276,7 +292,11 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
             // check, and only for a frame that proved usable — see the copy-out comment there for why NINA
             // cannot be handed the shared transfer buffer itself.
             if (!LumixCam.TryGetObjectBuffer(dataSize, out byte[] xfer)) {
-                Logger.Warning($"[LumixCapture] could not obtain a {dataSize}-byte transfer buffer; failing this frame.");
+                // Either the allocation failed, or the frame is larger than the capacity fixed at connect. The
+                // buffer is deliberately never grown - see TryGetObjectBuffer - so this is a failed frame
+                // rather than a bigger allocation.
+                Logger.Warning($"[LumixCapture] could not obtain a {dataSize}-byte transfer buffer " +
+                               $"(session capacity {LumixCam.ObjectBufferCapacity} bytes); failing this frame.");
                 ReleasePendingTransfer(cb_event_param);
                 FailExposure($"Could not allocate a {dataSize}-byte buffer for the frame.");
                 return;
@@ -293,8 +313,24 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
             // complete the download once we've actually pulled a recognisable image; otherwise ignore this object
             // and keep awaiting the real frame — the valid RW2/JPEG arrives on the next OBJCT event.
             if (gr != LMX_BOOL_TRUE || !IsKnownImageHeader(xfer, dataSize)) {
-                Logger.Warning($"[LumixCapture] object 0x{cb_event_param:X} is not a usable image (ret={gr}, format=0x{formatType:X}, size={dataSize}) — ignoring, waiting for the real frame.");
                 ReleasePendingTransfer(cb_event_param);
+
+                _unusableCount++;
+                if (_firstUnusableUtc == DateTime.MinValue) { _firstUnusableUtc = DateTime.UtcNow; }
+                TimeSpan waited = DateTime.UtcNow - _firstUnusableUtc;
+
+                if (waited > UNUSABLE_OBJECT_GRACE || _unusableCount >= UNUSABLE_OBJECT_LIMIT) {
+                    // Terminal: stop waiting for a frame that is not coming and let the sequence see a capture
+                    // error now, rather than stalling until N.I.N.A.'s exposure+20s timeout fires.
+                    Logger.Error($"[LumixCapture] giving up on this frame: {_unusableCount} unusable object(s) " +
+                                 $"in {waited.TotalSeconds:0.0}s, the last one ret={gr}, format=0x{formatType:X}, size={dataSize}. " +
+                                 "Failing the exposure so the sequence can continue.");
+                    FailExposure("The camera did not deliver a usable image for this exposure." + DescribeCardForFailure());
+                    return;
+                }
+
+                Logger.Warning($"[LumixCapture] object 0x{cb_event_param:X} is not a usable image (ret={gr}, format=0x{formatType:X}, size={dataSize}) — ignoring, waiting for the real frame " +
+                               $"({_unusableCount} so far, {(UNUSABLE_OBJECT_GRACE - waited).TotalSeconds:0.0}s left before this frame is failed).");
                 return;   // do NOT complete the exposure with junk data
             }
 
@@ -838,6 +874,10 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
                 // that gets cancelled here can leave a transfer outstanding, and that is exactly when a second
                 // request must not go on the channel.
                 bool idleOnEntry = _downloadExposure == null || _downloadExposure.Task.Status > TaskStatus.Running;
+
+                // Per-exposure, not per-session: a placeholder on one frame must not count against the next.
+                _firstUnusableUtc = DateTime.MinValue;
+                _unusableCount = 0;
                 if (_recheckCardCapacity) {
                     // The previous frame came back empty. Re-read the card here, on NINA's thread, so the next
                     // failure message carries a current number instead of the one from connect.
@@ -1295,6 +1335,19 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
                         LumixCam.LMX_func_api_SetupFilesConfig_Set_Target(saveTgt, out retError);
                         Logger.Info($"Save target set to {saveTgt} (0=SD,1=PC,2=PC+SD), err={LumixError.Describe(retError)}.");
                         ReportCardCapacity(saveTgt);
+                        // Fix the transfer buffer's capacity for the session, from this body's sensor rather
+                        // than a constant: 2 bytes per pixel covers 14-bit samples padded to 16, plus headroom
+                        // for the thumbnail and metadata an RW2 carries. Set once; never grown afterwards,
+                        // because a buffer the SDK may still write into can never be freed.
+                        int px = _currentCameraspecs.Width * _currentCameraspecs.Height;
+                        if (px > 0) {
+                            long cap = (long)px * 2L + 16L * 1024L * 1024L;
+                            if (cap > MAX_OBJECT_BYTES) { cap = MAX_OBJECT_BYTES; }
+                            LumixCam.SetObjectBufferCapacity((int)cap);
+                        }
+                        Logger.Info($"Transfer buffer capacity for this session: {LumixCam.ObjectBufferCapacity} bytes " +
+                                    $"(sensor {_currentCameraspecs.Width}x{_currentCameraspecs.Height}).");
+
                         // The session's first battery read, taken here because the channel is quiet at connect.
                         // It also starts the refresh interval, so the first exposure does not immediately read
                         // again; after this the only reads are the throttled idle-point refreshes. See the
