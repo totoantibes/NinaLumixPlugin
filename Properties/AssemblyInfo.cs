@@ -7,8 +7,8 @@ using System.Runtime.InteropServices;
 
 // [MANDATORY] The assembly versioning
 //Should be incremented for each new release build of a plugin
-[assembly: AssemblyVersion("1.3.1.1")]
-[assembly: AssemblyFileVersion("1.3.1.1")]
+[assembly: AssemblyVersion("1.3.1.2")]
+[assembly: AssemblyFileVersion("1.3.1.2")]
 
 // [MANDATORY] The name of your plugin
 [assembly: AssemblyTitle("LumixCamera")]
@@ -69,7 +69,7 @@ Extended-mode features:
 * Image-quality control: automatically switches the camera to RAW on connect for full-quality colour frames (Prefer JPEG forces JPEG for the RAW-decode workaround). Standard mode cannot change image quality - it only warns if the camera captures JPEG instead of RAW
 * Battery information
 * Live camera-mode reading, including the C1-C3 custom presets
-* Save destination: SD card, directly to the PC (cardless), or both
+* Save destination: SD card, directly to the PC (cardless), or both. If the card is missing or full when N.I.N.A. starts, the session saves to the PC instead of failing, and says so - your setting is left alone
 * A real capture-complete event instead of waiting on the SD-card file
 
 To enable extended mode: install LUMIX Tether, close it (it can't share the USB with N.I.N.A.), then tick 'Use LUMIX Tether extended features' in the options and reconnect. The DLL is auto-detected at the default install path, or a custom path can be set.

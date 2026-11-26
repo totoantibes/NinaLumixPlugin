@@ -1,5 +1,44 @@
 ﻿# LumixCamera
 
+## 1.3.1.2
+Four fixes, all of them found or proven on a camera rather than reasoned about. Two came from
+review of 1.3.1.1 by the plugin-manifest maintainer; the other two were found while verifying
+those on hardware.
+
+- **A quick reconnect could leave N.I.N.A. connected to a camera session that no longer existed.**
+  Disconnect returns as soon as it has started its teardown, so the interface never freezes, but
+  nothing waited for that teardown to finish. Reconnect fast enough and the old teardown closed
+  the session the new connect had just opened - N.I.N.A. then reported the camera connected, and
+  the next exposure died with nothing in the log to explain it, showing up only as "camera did not
+  set image as ready". Reconnecting by hand is slow enough to be safe by luck; anything driving
+  N.I.N.A. through its API is not. A reconnect now waits for the previous teardown.
+- **Memory held for image transfers no longer grows through a session.** The pinned transfer buffer
+  was replaced whenever a larger frame arrived, and because the camera's SDK can still write into
+  a retired buffer, none of them could ever be released - about 170 MB held after a 131-frame
+  session. The size is now fixed once, when the camera connects, from that body's sensor.
+- **A frame that never arrives now fails the exposure instead of waiting.** Some bodies announce a
+  placeholder before the real frame, which the plugin has always ignored and waited past. If the
+  real frame never came, the exposure only ended on N.I.N.A.'s own timeout. It now fails after ten
+  seconds, so a sequence moves on to the next frame.
+- **Choosing the SD card as the save destination no longer loses the session when no card is in.**
+  With the save destination set to SD only and the slot empty, the camera sends nothing at all and
+  every exposure ran to a timeout - a night could produce no frames. If the card is missing or full
+  when N.I.N.A. starts, the session now saves to the PC and says so. The setting itself is left
+  alone, and a restart is needed once the card is sorted out.
+
+Also:
+
+- **Switching between extended and standard mode requires restarting N.I.N.A.**, which was always
+  true and is now stated in the plugin options and the description, instead of presenting as
+  exposures that time out for no visible reason. The plugin warns when the setting and the mode in
+  use disagree.
+- A spurious "there is no card in the camera" warning on reconnect is gone. The camera's answer
+  about the card cannot be trusted after a reconnect - it is wrong in both directions and only
+  sometimes - so it is now believed only on the first connection after N.I.N.A. starts.
+
+`docs/crash-analysis-2026-11-24.md` carries the measurements behind all of this, including what
+could not be tested and why.
+
 ## 1.3.1.1
 Metadata only - no code changes, and functionally identical to 1.3.1.0.
 
