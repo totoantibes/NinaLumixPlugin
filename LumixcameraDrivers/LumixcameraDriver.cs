@@ -171,6 +171,16 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
         // existed. With a card in, the same call returned 2576 — a real count, whatever the save target.
         private const uint CARD_FRAMES_IMPLAUSIBLE = 1000000;
 
+        // The reading is CACHED FOR THE LIFE OF THE PROCESS, and not by this plugin. Measured on a GH5S on
+        // 2026-11-26: with the card pulled while N.I.N.A. was running, both calls kept returning the
+        // card-present answer - status 0x00010002 and the same 1404 frames as when the card was in - and a
+        // full reconnect did not refresh it, even though that closes and reopens the device and the session.
+        // Restarting N.I.N.A. did: the same empty slot then read status 0x00000002 and 0xFFFFFFFF, and the
+        // no-card warning fired correctly. So the staleness sits in the Tether DLL at process scope, which
+        // means there is nothing to fix here: a card removed or inserted mid-session cannot be noticed.
+        // DescribeCardForFailure is worded "was last reported" for exactly this reason - do not promote it
+        // to the present tense.
+
         private uint? ReadCardFreeFrames() {
             bool ok = LumixCam.Ext_TryGetFreeSpaceInImages(out uint images, out uint spaceErr, out string spaceRaw);
             bool statusOk = LumixCam.Ext_TryGetStatusOfCards(out uint status, out uint statusErr, out string statusRaw);
@@ -868,6 +878,16 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
 
         private Task bulbCompletionTask = null;
 
+        // The teardown Disconnect() starts in the background, kept so that the next Connect can wait for it.
+        // Static on purpose: the SDK has ONE process-wide session, so a teardown left running by one driver
+        // instance must still hold up the next instance's Connect.
+        private static Task _teardownTask = null;
+
+        // How long Connect will wait for that teardown. The teardown's own waits are bounded - a 3 s wait on
+        // the bulb completion, a 400 ms settle, then the SDK closes - so this only has to be comfortably
+        // larger than that, and bounded so a stalled SDK call cannot wedge Connect for ever.
+        private const int TEARDOWN_WAIT_MS = 15000;
+
         public void StartExposure(CaptureSequence sequence) {
             if (Connected) {
                 // Captured before the cancellation below, and used only by the battery refresh: an exposure
@@ -1282,6 +1302,59 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
         public Task<bool> Connect(CancellationToken token) {
             return Task.Run<bool>(() => {
                 try {
+                    // Does the options setting still match the mode this process actually loaded? The mode is
+                    // bound once, when N.I.N.A. starts: NativeBinding.Initialize runs in the provider's
+                    // constructor and the first P/Invoke caches the resolved native handle for the whole
+                    // assembly, with no public API to drop it. So toggling the setting and reconnecting cannot
+                    // change anything - and on 2026-11-26 that presented as 120 s exposures timing out with
+                    // nothing in the log to explain it.
+                    //
+                    // This check lives HERE, in Connect, and not in the provider's constructor: an earlier
+                    // version put it there, where Initialize has just set ExtendedMode from this very setting,
+                    // so the two always agreed and the warning could never fire. Connect is what a reconnect
+                    // calls, which is when the user is actually waiting to find out.
+                    if (Properties.Settings.Default.UseTetherExtended != NativeBinding.ExtendedMode) {
+                        string want = Properties.Settings.Default.UseTetherExtended ? "extended (LUMIX Tether)" : "standard (public SDK)";
+                        string have = NativeBinding.ExtendedMode ? "extended (LUMIX Tether)" : "standard (public SDK)";
+                        Logger.Warning($"Lumix: the plugin options ask for {want} mode but this N.I.N.A. session " +
+                                       $"loaded {have} mode. The mode is bound at start-up and cannot be changed " +
+                                       "while N.I.N.A. runs, so reconnecting will not apply it. Restart N.I.N.A.");
+                        try {
+                            Notification.ShowWarning($"Lumix: {want} mode needs a N.I.N.A. restart." + Environment.NewLine +
+                                                     $"Still running in {have} mode until then.");
+                        } catch { }
+                    }
+
+                    // Wait for a teardown left running by a previous Disconnect before touching the SDK.
+                    // Disconnect returns as soon as it has STARTED its teardown, so a fast reconnect - and
+                    // N.I.N.A.'s Advanced API can issue one within a millisecond - used to open a new session
+                    // while the old teardown was still on its way to CloseSession/CloseDevice. Those then closed
+                    // the session this Connect had just opened: N.I.N.A. reported the camera connected, and the
+                    // next exposure died with no driver log line at all, surfacing only as N.I.N.A.'s own
+                    // "did not set image as ready" timeout. Measured on this rig on 2026-11-26: CloseSession at
+                    // 11:44:48.3829, Connect reporting Connected=True at .3885, CloseDevice finishing at .5334,
+                    // and the 3 s exposure three seconds later dead. One reconnect was enough to do it.
+                    Task pendingTeardown = _teardownTask;
+                    if (pendingTeardown != null && !pendingTeardown.IsCompleted) {
+                        var teardownWait = System.Diagnostics.Stopwatch.StartNew();
+                        Logger.Info("[Lumix] Connect: a teardown from the previous disconnect is still running; waiting for it.");
+                        bool finished;
+                        try {
+                            finished = pendingTeardown.Wait(TEARDOWN_WAIT_MS);
+                        } catch (Exception tx) {
+                            // The teardown faulted. That is its own business - it logs its own errors - and the
+                            // only thing that matters here is that it is no longer running.
+                            Logger.Info("[Lumix] Connect: the previous teardown ended with an error: " + tx.Message);
+                            finished = true;
+                        }
+                        if (finished) {
+                            Logger.Info($"[Lumix] Connect: previous teardown finished after {teardownWait.ElapsedMilliseconds} ms; connecting.");
+                        } else {
+                            Logger.Warning($"[Lumix] Connect: the previous teardown has not finished after {TEARDOWN_WAIT_MS} ms. " +
+                                           "Connecting anyway - an SDK call is stalled, and if this connection misbehaves, restart N.I.N.A.");
+                        }
+                    }
+
                     //connect to device
                     if (NativeBinding.ExtendedMode) {
                         _connected = LumixCam.Ext_Connect(_index, out retError);
@@ -1335,19 +1408,6 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
                         LumixCam.LMX_func_api_SetupFilesConfig_Set_Target(saveTgt, out retError);
                         Logger.Info($"Save target set to {saveTgt} (0=SD,1=PC,2=PC+SD), err={LumixError.Describe(retError)}.");
                         ReportCardCapacity(saveTgt);
-                        // Fix the transfer buffer's capacity for the session, from this body's sensor rather
-                        // than a constant: 2 bytes per pixel covers 14-bit samples padded to 16, plus headroom
-                        // for the thumbnail and metadata an RW2 carries. Set once; never grown afterwards,
-                        // because a buffer the SDK may still write into can never be freed.
-                        int px = _currentCameraspecs.Width * _currentCameraspecs.Height;
-                        if (px > 0) {
-                            long cap = (long)px * 2L + 16L * 1024L * 1024L;
-                            if (cap > MAX_OBJECT_BYTES) { cap = MAX_OBJECT_BYTES; }
-                            LumixCam.SetObjectBufferCapacity((int)cap);
-                        }
-                        Logger.Info($"Transfer buffer capacity for this session: {LumixCam.ObjectBufferCapacity} bytes " +
-                                    $"(sensor {_currentCameraspecs.Width}x{_currentCameraspecs.Height}).");
-
                         // The session's first battery read, taken here because the channel is quiet at connect.
                         // It also starts the refresh interval, so the first exposure does not immediately read
                         // again; after this the only reads are the throttled idle-point refreshes. See the
@@ -1396,6 +1456,22 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
                         Notification.ShowWarning("Overriding Width from Plugin Settings");
                     }
 
+                    // Fix the transfer buffer's capacity for the session, now that the sensor is known - this
+                    // has to come AFTER the specs table and the user's overrides above, because an earlier
+                    // version of this sat before them and sized from 0x0, silently falling back to the
+                    // default. 2 bytes per pixel covers 14-bit samples padded to 16, plus 16 MB for the
+                    // thumbnail and metadata an RW2 carries. Set once; never grown, because a buffer the SDK
+                    // may still be writing into can never be freed.
+                    int capPx = _currentCameraspecs.Width * _currentCameraspecs.Height;
+                    if (capPx > 0) {
+                        long cap = (long)capPx * 2L + 16L * 1024L * 1024L;
+                        if (cap > MAX_OBJECT_BYTES) { cap = MAX_OBJECT_BYTES; }
+                        LumixCam.SetObjectBufferCapacity((int)cap);
+                    }
+                    Logger.Info($"Transfer buffer capacity for this session: {LumixCam.ObjectBufferCapacity} bytes " +
+                                $"(sensor {_currentCameraspecs.Width}x{_currentCameraspecs.Height}" +
+                                (capPx > 0 ? ")." : ", unknown - using the built-in default)."));
+
                     //not useful in Nina context
                     //returnV = LumixCam.LMX_func_api_Reg_NotifyCallback((uint)Lmx_event_id.LMX_DEF_LIB_EVENT_ID_APERTURE, callback);
                     //returnV = LumixCam.LMX_func_api_Reg_NotifyCallback((uint)Lmx_event_id.LMX_DEF_LIB_EVENT_ID_WHITEBALANCE, callback);
@@ -1421,7 +1497,7 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
             // Native teardown is fire-and-forget: some SDK calls (CloseSession after a bulb) can block for a long
             // time, and we must never freeze NINA. If a call stalls it leaks a worker thread, but the UI stays
             // responsive. Each step is logged so the last line before it stops shows which call stalls.
-            Task.Run(() => {
+            _teardownTask = Task.Run(() => {
                 try {
                     // Live view first. Disconnect used to go straight to Delete_CallBackInfo and CloseSession
                     // with the SDK's live-view thread still running and still writing into session memory the

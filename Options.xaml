@@ -8,6 +8,8 @@
     <DataTemplate x:Key="LumixCamera_Options">
         <StackPanel Orientation="Vertical">
             <TextBlock FontWeight="Bold" Margin="0,0,0,4" Text="Extended features (LUMIX Tether)" />
+            <TextBlock Margin="0,0,0,4" TextWrapping="Wrap" Opacity="0.8"
+                       Text="Switching between extended and standard mode takes effect only after N.I.N.A. is restarted. The two modes use different Panasonic DLLs, and the one loaded at start-up cannot be swapped while N.I.N.A. is running - reconnecting the camera is not enough." />
             <StackPanel Orientation="Horizontal" Margin="0,0,0,2">
                 <CheckBox IsChecked="{Binding UseTetherExtended}" VerticalAlignment="Center" />
                 <TextBlock Margin="6,0,0,0" VerticalAlignment="Center">
