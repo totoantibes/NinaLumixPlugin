@@ -393,22 +393,50 @@ Three settings look alike and are not, which cost time on 2026-11-26. Measured, 
 
 | Setting | Takes effect on | Evidence |
 | --- | --- | --- |
-| Save target (PC / SD / PC+SD) | UNVERIFIED - may need a RESTART | the plugin WRITES it on a reconnect: one process, six connects, target 1 on five of them then target 2 at 12:08:21 after the option was changed, with err=NO_ERROR. Whether the camera HONOURS it on a reconnect is not established - the frame that followed was taken with no card, where PC+SD and PC-only are indistinguishable |
+| Save target (PC / SD / PC+SD) | a RECONNECT | settled by the OBJECT HANDLE, not by whether an image arrives. One process: 13 frames on target 1 all raised 0x12345678, the cardless PC transfer handle; the next frame after a reconnect applied target 0 raised real card objects (0x11434000, 0x19434EA2) instead. The camera changed behaviour with no restart |
 | Extended vs standard mode | a RESTART | the mode is bound once, in the providers constructor, and the first P/Invoke caches the resolved native handle for the whole assembly, with no public API to drop it |
 | What the camera reports about the card | a RESTART | the card reading is cached in the Tether DLL at process scope: a card pulled mid-session kept reading as present across a full reconnect, and only a restart read the empty slot |
 
-The save target is written in Connect, so a reconnect at least delivers the new value to the
-SDK without error. That is not the same as the camera acting on it, and the distinction was
-blurred once already in this document: the frame cited as confirmation had no card in the body,
-where PC+SD and PC-only behave identically. Given that the DLL caches the card state for the
-life of the process, it may well cache this too.
+The save target is written in Connect, and the camera acts on it from that point. Getting to
+that answer took two wrong turns worth recording, because both are easy to repeat.
 
-The test that would settle it needs no card inspection: with a card IN, set the save target to
-SD only and RECONNECT without restarting, then take one frame. If the camera honours it, no
-image reaches N.I.N.A. and the exposure ends on its timeout. If the camera ignores it and stays
-on PC, the frame arrives normally. Until that has been run, treat a save-target change as
-needing a restart.
+The first was citing a frame taken with NO CARD in the body as confirmation that PC+SD had been
+applied. With an empty slot, PC+SD and PC-only behave identically, so it confirmed nothing.
+
+The second was the test designed to settle it: set SD only, reconnect, and expect NO image to
+reach N.I.N.A. if the camera honoured it. That assumption was wrong. With SD only the camera
+writes to the card and raises OBJCT_ADD, and the driver pulls that object and hands it to
+N.I.N.A. just the same - so an image arrives either way and the test cannot discriminate.
+
+What does discriminate is the OBJECT HANDLE in the [LumixCapture] line. A PC transfer is always
+0x12345678, LMX_DEF_OBJ_CARDLESS_TRNSFER_HDL. A card object is a real handle. Read that, not
+whether a frame appeared.
 
 The other two rows are process-scoped and cannot be changed while N.I.N.A. runs. The plugin now warns at connect when
 the mode setting and the loaded mode disagree, because that one used to present as a 120s
 exposure timing out with nothing in the log to explain it.
+
+### The placeholder object, caught live
+
+The SD-only frame above also produced the first hardware sighting of the object the
+unusable-image guard exists for:
+
+    13:46:56.6114  object=0x11434000 format=0x3 size=131072
+    13:47:03.6045  Get_Object ret=0 err=0; magic=49 49 55 00
+    13:47:03.6050  WARNING  object 0x11434000 is not a usable image (ret=0, format=0x3,
+                            size=131072) - ignoring, waiting for the real frame
+    13:47:04.1992  object=0x19434EA2 format=0x2 size=18678272
+    13:47:04.9731  Get_Object ret=1 err=0; magic=49 49 55 00   -> saved
+
+A 128 KB format-0x3 object, exactly as the code comment describes, ignored, with the real frame
+arriving 0.6 s later and saving normally. The non-terminal branch of the bounded wait therefore
+works on hardware; the terminal branch, failing the frame, still has not fired here.
+
+It also shows why the header check cannot stand alone. The magic read 49 49 55 00 - a VALID RW2
+header - because Get_Object wrote nothing and the shared pinned buffer still held the previous
+frame's bytes. Only ret=0 caught it. Code that trusted the header would have handed N.I.N.A. the
+previous frame a second time.
+
+That Get_Object took 7.0 s to return 0. Noted, not explained, and deliberately NOT attributed to
+the collision documented earlier in this file: same symptom, different trigger, no evidence
+connecting them.
