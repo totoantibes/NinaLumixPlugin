@@ -395,7 +395,7 @@ Three settings look alike and are not, which cost time on 2026-11-26. Measured, 
 | --- | --- | --- |
 | Save target (PC / SD / PC+SD) | a RECONNECT | settled by the OBJECT HANDLE, not by whether an image arrives. One process: 13 frames on target 1 all raised 0x12345678, the cardless PC transfer handle; the next frame after a reconnect applied target 0 raised real card objects (0x11434000, 0x19434EA2) instead. The camera changed behaviour with no restart |
 | Extended vs standard mode | a RESTART | the mode is bound once, in the providers constructor, and the first P/Invoke caches the resolved native handle for the whole assembly, with no public API to drop it |
-| What the camera reports about the card | a RESTART | the card reading is cached in the Tether DLL at process scope: a card pulled mid-session kept reading as present across a full reconnect, and only a restart read the empty slot |
+| What the camera reports about the card | believe it only on the FIRST connect of the process | after a session is reopened the reading is intermittently wrong, and wrong in more than one way - see the section below. The free count itself is live |
 
 The save target is written in Connect, and the camera acts on it from that point. Getting to
 that answer took two wrong turns worth recording, because both are easy to repeat.
@@ -440,3 +440,70 @@ previous frame a second time.
 That Get_Object took 7.0 s to return 0. Noted, not explained, and deliberately NOT attributed to
 the collision documented earlier in this file: same symptom, different trigger, no evidence
 connecting them.
+
+### The card reading cannot be believed after a reconnect
+
+This began as "the reading is cached at process scope", on the strength of one measurement. That
+characterisation was wrong, and the fuller set of measurements is worth keeping because the wrong
+version nearly shipped a bug.
+
+All on one GH5S on 2026-11-26, with the card's physical state known at each point:
+
+| Time | Connect kind | Card physically | Status word | Free frames | Verdict |
+| --- | --- | --- | --- | --- | --- |
+| 12:08:21 | reconnect | OUT | 0x10002 | 1404 | WRONG - stale present |
+| 12:16:40 | first of process | OUT | 0x2 | 0xFFFFFFFF | correct |
+| 14:09:36 | first of process | IN | 0x10002 | 1404 | correct |
+| 14:15:38 | first of process | IN | 0x10002 | 1404 | correct |
+| 14:20:27 | reconnect | IN | 0x2 | 0xFFFFFFFF | WRONG - reads as empty |
+| 14:36:05 | first of process | IN | 0x10002 | 1403 | correct |
+| 14:38:49 | reconnect | IN | 0x10002 | 1402 | correct |
+
+Three things follow, and only the first was in the earlier version of this file.
+
+**A reconnect reading is not trustworthy.** Every wrong reading came after a session was reopened,
+and every first-connect reading was right.
+
+**It is wrong in two different ways,** which rules out simple caching. At 12:08 it answered stale
+present with a plausible count while the slot was empty. At 14:20 it answered 0x2 / 0xFFFFFFFF -
+byte-identical to the genuine empty slot at 12:16 - while a card was in. So "there is no card" and
+"this session cannot say" cannot be told apart.
+
+**It is intermittent, not consistent.** The reconnect at 14:38:49 answered correctly. A signal that
+is usually right and occasionally indistinguishably wrong is the worst kind to act on, and acting
+on it is exactly what cost a build: a PC fallback gated on an apparently empty slot overrode a
+perfectly good card at 14:20 and silently stopped writing to it.
+
+**The free count itself is live.** It read 1404, then 1403 after one frame went to the card, then
+1402 after another. The earlier claim that it was cached was wrong; what fails is the whole read,
+not the freshness of the number.
+
+### Falling back to PC when the card cannot be written
+
+With the save target on SD only and an empty slot, the camera raises no object event at all, so
+every exposure runs to N.I.N.A.'s own exposure+20s timeout and the session produces nothing. The
+plugin now resolves the save target before setting it, and falls back to PC for that session when
+the card demonstrably cannot be written.
+
+Two limits, both of which come from the table above:
+
+**Only on the first connect of the process.** Both places that act on an apparently empty slot are
+gated on it - the fallback, and the pre-existing "there is no card in the camera" warning, which
+was firing spuriously on reconnects before this branch existed. This costs the fallback nothing,
+because the case it exists for is a card absent or full when N.I.N.A. starts, and that IS the first
+connect.
+
+**The stored setting is never changed.** The override lasts for the session, so the user's choice
+survives, and the warning names the restart needed to use the card again.
+
+Verified on a GH5S:
+
+| Configuration | Result |
+| --- | --- |
+| Card out, SD only, first connect | fallback fired, target 1 forced, frame arrived via 0x12345678 and saved - where the same configuration previously produced no frame at all |
+| Card in, SD only, first connect then a reconnect | no fallback either time, target 0 both times, both frames via real card objects (0x19434EA4, 0x19434EA5) |
+
+One earlier observation is refined here too. `[LumixBulb] open` returning ret=2 rather than ret=1
+was noted as tracking card absence. It does not: ret=2 appeared only on the two PC+SD frames taken
+with no card, while SD-only-with-no-card and the PC fallback both gave ret=1. It looks like "the
+target includes the card and the card is unusable" - two samples, so a correlation and not a law.

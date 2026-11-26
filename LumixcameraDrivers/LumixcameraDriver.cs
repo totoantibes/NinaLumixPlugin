@@ -155,6 +155,16 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
         private uint? _lastKnownCardStatus;
         private bool _recheckCardCapacity;
 
+        // The save target actually in force for this session, which is not always the one the user asked
+        // for - see ResolveSaveTarget. Anything that reasons about where frames are going must read this,
+        // not Settings.Default.SaveTarget, or it will warn about a card problem that has been worked around.
+        private ushort _effectiveSaveTarget = LumixCam.SAVE_TARGET_PC;
+
+        // Has this PROCESS connected once already? The card reading is only trustworthy on the first
+        // connect; see CardReadingIsTrustworthy. Static, because the reading is a property of the loaded
+        // DLL and not of a driver instance.
+        private static bool _processHasConnectedBefore;
+
         // A flat set is 21 frames and a night of subs is hundreds, so fewer than this is worth saying out loud
         // before the session starts rather than discovering at 3 a.m.
         private const uint LOW_CARD_FRAMES = 50;
@@ -171,15 +181,27 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
         // existed. With a card in, the same call returned 2576 — a real count, whatever the save target.
         private const uint CARD_FRAMES_IMPLAUSIBLE = 1000000;
 
-        // The reading is CACHED FOR THE LIFE OF THE PROCESS, and not by this plugin. Measured on a GH5S on
-        // 2026-11-26: with the card pulled while N.I.N.A. was running, both calls kept returning the
-        // card-present answer - status 0x00010002 and the same 1404 frames as when the card was in - and a
-        // full reconnect did not refresh it, even though that closes and reopens the device and the session.
-        // Restarting N.I.N.A. did: the same empty slot then read status 0x00000002 and 0xFFFFFFFF, and the
-        // no-card warning fired correctly. So the staleness sits in the Tether DLL at process scope, which
-        // means there is nothing to fix here: a card removed or inserted mid-session cannot be noticed.
-        // DescribeCardForFailure is worded "was last reported" for exactly this reason - do not promote it
-        // to the present tense.
+        // THIS READING CANNOT BE BELIEVED AFTER A RECONNECT. Measured on a GH5S on 2026-11-26, physical card
+        // state known at each point:
+        //
+        //   12:08:21  reconnect          card OUT   status 0x10002, 1404 frames   WRONG, stale present
+        //   12:16:40  first of process   card OUT   status 0x2, 0xFFFFFFFF        correct
+        //   14:15:38  first of process   card IN    status 0x10002, 1404 frames   correct
+        //   14:20:27  reconnect          card IN    status 0x2, 0xFFFFFFFF        WRONG, reads as empty
+        //   14:38:49  reconnect          card IN    status 0x10002, 1402 frames   correct
+        //
+        // So it is wrong in BOTH directions, and only intermittently - a reconnect is sometimes right. The
+        // 14:20 answer is byte-identical to the genuine empty slot at 12:16, so "there is no card" and "this
+        // session has just reopened and cannot say" cannot be told apart. Anything that acts on an apparently
+        // empty slot must gate on CardReadingIsTrustworthy; a fallback that did not do so overrode a working
+        // card at 14:20 and silently stopped writing to it.
+        //
+        // The free COUNT is live, not cached - it read 1404, 1403, 1402 as frames were written to the card. An
+        // earlier version of this comment claimed the whole reading was cached at process scope. That was one
+        // measurement generalised too far. What fails is the read itself, not the freshness of the number.
+        //
+        // DescribeCardForFailure is worded "was last reported" because of all this - do not promote it to the
+        // present tense.
 
         private uint? ReadCardFreeFrames() {
             bool ok = LumixCam.Ext_TryGetFreeSpaceInImages(out uint images, out uint spaceErr, out string spaceRaw);
@@ -191,7 +213,8 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
                 return null;
             }
             if (images == LumixCam.CARD_FRAMES_NO_NUMBER || images >= CARD_FRAMES_IMPLAUSIBLE) {
-                Logger.Info($"[LumixCard] the camera gave no usable frame count (0x{images:X8}); card status=0x{status:X} (space bytes={spaceRaw}, status bytes={statusRaw}).");
+                Logger.Info($"[LumixCard] the camera gave no usable frame count (0x{images:X8}); card status=0x{status:X} (space bytes={spaceRaw}, status bytes={statusRaw})." +
+                        (CardReadingIsTrustworthy ? "" : " This is a reconnect, so this reading is NOT evidence about the card - a session that has just reopened answers exactly like an empty slot."));
                 _lastKnownCardFreeFrames = null;
                 return null;
             }
@@ -200,17 +223,79 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
             return images;
         }
 
-        // Read the card and say so where NINA shows it. Only warns when the save target actually writes to the
-        // card — on PC-only the card's state does not matter.
+        // Read the card and say so where NINA shows it.
         private void ReportCardCapacity(ushort saveTarget) {
+            WarnAboutCard(saveTarget, ReadCardFreeFrames());
+        }
+
+        // Can the card reading be believed? Only on the first connect of the process.
+        //
+        // Measured on a GH5S on 2026-11-26, one N.I.N.A. process, the card physically in the body the whole
+        // time:
+        //   14:15:38  first connect after a restart   status bytes 02-00-01-00 -> 0x10002, 1404 frames  CORRECT
+        //   14:20:27  after a plain disconnect/connect status bytes 02-00-00-00 -> 0x2, 0xFFFFFFFF      WRONG
+        // and earlier the same day, in the other direction, with the card physically OUT:
+        //   12:08:21  after a reconnect                status 0x10002, 1404 frames                      WRONG
+        //   12:16:40  first connect after a restart    status 0x2, 0xFFFFFFFF                           CORRECT
+        //
+        // The 14:20 reading is byte-identical to the genuine empty-slot reading at 12:16, so "there is no card"
+        // and "this session is too young to say" CANNOT BE TOLD APART. Any code that acts on an apparently
+        // empty slot must therefore refuse to act on a reconnect, or it will override a perfectly good card -
+        // which is exactly what happened at 14:20 before this check existed.
+        //
+        // This also covers a false warning that predates the fallback: ReportCardCapacity would announce "there
+        // is no card in the camera - captures will fail" on that same reconnect.
+        private static bool CardReadingIsTrustworthy => !_processHasConnectedBefore;
+
+        // Decide the save target for this session, reading the card once.
+        //
+        // When the user asked for a target that writes to the card and the camera says, unambiguously, that it
+        // cannot be written, fall back to PC so the capture works instead of failing. With SD only and an empty
+        // slot the camera raises NO object event at all - measured on a GH5S on 2026-11-26 - so every exposure
+        // runs to NINA's own exposure+20s timeout and the session produces nothing at all. With PC+SD the frame
+        // reaches the PC regardless, so there the fallback only avoids a card write that would fail.
+        //
+        // Only on UNAMBIGUOUS evidence: a status word that says the slot is empty, or a free count the camera
+        // gives as exactly zero. "The camera would not say" is NOT evidence of absence and must never trigger
+        // this - a reading the body withholds is the one case where guessing would do harm.
+        //
+        // The stored setting is deliberately NOT changed: the user's choice survives, and the override lasts
+        // only for this session. It cannot do better than that, because the Tether DLL caches the card reading
+        // for the life of the process - see ReadCardFreeFrames - so a card inserted after NINA started still
+        // reads as absent and the fallback would stay in force. That is why the warning names the restart.
+        private ushort ResolveSaveTarget(ushort wanted) {
             uint? free = ReadCardFreeFrames();
+            bool slotEmpty = CardReadingIsTrustworthy
+                             && _lastKnownCardStatus.HasValue
+                             && !LumixCam.CardPresent(_lastKnownCardStatus.Value);
+            bool cardFull = free.HasValue && free.Value == 0;
+            if (!SaveTargetUsesCard(wanted) || (!slotEmpty && !cardFull)) {
+                WarnAboutCard(wanted, free);
+                return wanted;
+            }
+            string why = slotEmpty ? "there is no card in the camera" : "the camera's SD card is full";
+            Logger.Warning($"[LumixCard] the save target asks to write to the SD card, but {why}. Falling back to " +
+                           "PC for this session so captures still work. The plugin setting is unchanged; restart " +
+                           "N.I.N.A. after fixing the card to use the card again.");
+            try {
+                Notification.ShowWarning($"Lumix: {why}, so this session saves to the PC only." + Environment.NewLine +
+                                         "Your save-target setting is unchanged. Restart N.I.N.A. after fixing the card.");
+            } catch { }
+            return LumixCam.SAVE_TARGET_PC;
+        }
+
+        // Say where NINA shows it what the card reading means. Only warns when the target in force actually
+        // writes to the card - on PC-only the card's state does not matter.
+        private void WarnAboutCard(ushort saveTarget, uint? free) {
             if (!SaveTargetUsesCard(saveTarget)) { return; }
             if (free == null) {
                 // No usable count AND the save target writes to the card: the camera has somewhere it is meant
                 // to write and cannot tell us there is room. The status word separates the two causes — an empty
                 // slot reads 0x00000002 and a card in the slot 0x00010002 — so name which one it is, falling
                 // back to the vaguer wording when the status word is missing or in some third state.
-                bool slotEmpty = _lastKnownCardStatus.HasValue && !LumixCam.CardPresent(_lastKnownCardStatus.Value);
+                bool slotEmpty = CardReadingIsTrustworthy
+                                 && _lastKnownCardStatus.HasValue
+                                 && !LumixCam.CardPresent(_lastKnownCardStatus.Value);
                 string reason = slotEmpty
                     ? "there is no card in the camera"
                     : "the camera reports no usable capacity for the card";
@@ -902,7 +987,7 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
                     // The previous frame came back empty. Re-read the card here, on NINA's thread, so the next
                     // failure message carries a current number instead of the one from connect.
                     _recheckCardCapacity = false;
-                    ReportCardCapacity((ushort)Properties.Settings.Default.SaveTarget);
+                    ReportCardCapacity(_effectiveSaveTarget);
                 }
                 if (_downloadExposure != null && _downloadExposure.Task.Status <= TaskStatus.Running) {
                     Notification.ShowWarning("Another exposure still in progress. Cancelling it to start another.");
@@ -1404,10 +1489,16 @@ namespace Roberthasson.NINA.Lumixcamera.LumixcameraDrivers {
                     // Save destination (extended mode only): SD only / PC only (cardless) / PC+SD. With a PC
                     // target the camera fires OBJCT_REQ_TRNSFER on capture and we pull the frame via Get_Object.
                     if (NativeBinding.ExtendedMode) {
-                        ushort saveTgt = (ushort)Properties.Settings.Default.SaveTarget;
+                        // Resolve before setting, not after: ResolveSaveTarget reads the card and may fall back
+                        // to PC, and the camera must be given the target that is actually going to be used.
+                        ushort wantedTgt = (ushort)Properties.Settings.Default.SaveTarget;
+                        ushort saveTgt = ResolveSaveTarget(wantedTgt);
+                        _effectiveSaveTarget = saveTgt;
+                        // From here on the card reading is a reconnect reading, and not to be believed.
+                        _processHasConnectedBefore = true;
                         LumixCam.LMX_func_api_SetupFilesConfig_Set_Target(saveTgt, out retError);
-                        Logger.Info($"Save target set to {saveTgt} (0=SD,1=PC,2=PC+SD), err={LumixError.Describe(retError)}.");
-                        ReportCardCapacity(saveTgt);
+                        Logger.Info($"Save target set to {saveTgt} (0=SD,1=PC,2=PC+SD), err={LumixError.Describe(retError)}." +
+                                    (saveTgt != wantedTgt ? $" The setting asked for {wantedTgt}; fell back to PC because the card cannot be written." : ""));
                         // The session's first battery read, taken here because the channel is quiet at connect.
                         // It also starts the refresh interval, so the first exposure does not immediately read
                         // again; after this the only reads are the throttled idle-point refreshes. See the
